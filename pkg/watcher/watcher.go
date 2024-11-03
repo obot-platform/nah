@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/acorn-io/baaah/pkg/log"
-	"github.com/acorn-io/baaah/pkg/typed"
+	"github.com/otto8-ai/nah/pkg/log"
+	"github.com/otto8-ai/nah/pkg/typed"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta2 "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

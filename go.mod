@@ -1,4 +1,4 @@
-module github.com/acorn-io/baaah
+module github.com/otto8-ai/nah
 
 go 1.23
 

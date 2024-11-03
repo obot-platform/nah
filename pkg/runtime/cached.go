@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acorn-io/baaah/pkg/uncached"
+	"github.com/otto8-ai/nah/pkg/uncached"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"

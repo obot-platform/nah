@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/acorn-io/baaah/pkg/typed"
+	"github.com/otto8-ai/nah/pkg/typed"
 	"github.com/sirupsen/logrus"
 	"k8s.io/kube-openapi/pkg/common"
 	"k8s.io/kube-openapi/pkg/validation/spec"

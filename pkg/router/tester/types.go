@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/acorn-io/baaah/pkg/router"
-	"github.com/acorn-io/baaah/pkg/uncached"
 	"github.com/google/uuid"
+	"github.com/otto8-ai/nah/pkg/router"
+	"github.com/otto8-ai/nah/pkg/uncached"
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta2 "k8s.io/apimachinery/pkg/api/meta"
@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
@@ -26,6 +27,10 @@ type Client struct {
 	SchemeObj *runtime.Scheme
 	Created   []kclient.Object
 	Updated   []kclient.Object
+}
+
+func (c Client) Watch(ctx context.Context, obj kclient.ObjectList, opts ...kclient.ListOption) (watch.Interface, error) {
+	panic("unsupported")
 }
 
 func (c Client) objects() []kclient.Object {

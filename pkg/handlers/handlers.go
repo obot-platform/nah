@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	"github.com/acorn-io/baaah/pkg/apply"
-	"github.com/acorn-io/baaah/pkg/router"
+	"github.com/otto8-ai/nah/pkg/apply"
+	"github.com/otto8-ai/nah/pkg/router"
 )
 
 // GCOrphans will delete an object whose owner has been deleted.
