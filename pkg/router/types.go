@@ -66,9 +66,7 @@ func (r *Request) Delete(object kclient.Object) error {
 
 type Response interface {
 	Attributes() map[string]any
-	DisablePrune()
 	RetryAfter(delay time.Duration)
-	Objects(obj ...kclient.Object)
 }
 
 func Key(namespace, name string) kclient.ObjectKey {

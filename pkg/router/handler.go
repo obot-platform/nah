@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/moby/locker"
-	"github.com/otto8-ai/nah/pkg/apply"
 	"github.com/otto8-ai/nah/pkg/backend"
 	"github.com/otto8-ai/nah/pkg/log"
 	"github.com/otto8-ai/nah/pkg/merr"
@@ -66,7 +65,6 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 			scheme:    scheme,
 		},
 		save: save{
-			apply:  apply.New(backend).WithOwnerSubContext(name),
 			cache:  backend,
 			client: backend,
 		},
@@ -322,10 +320,7 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 	}
 
 	if handles {
-		m.watchingLock.Lock()
-		keys := maps.Keys(m.watching)
-		m.watchingLock.Unlock()
-		newObj, err := m.save.save(unmodifiedObject, req, resp, keys)
+		newObj, err := m.save.save(unmodifiedObject, req)
 		if err != nil {
 			if err := m.handleError(req, resp, err); err != nil {
 				return nil, err
@@ -358,25 +353,12 @@ type response struct {
 	ResponseAttributes
 
 	delay    time.Duration
-	objects  []kclient.Object
 	registry TriggerRegistry
-	noPrune  bool
-}
-
-func (r *response) DisablePrune() {
-	r.noPrune = true
 }
 
 func (r *response) RetryAfter(delay time.Duration) {
 	if r.delay == 0 || delay < r.delay {
 		r.delay = delay
-	}
-}
-
-func (r *response) Objects(objs ...kclient.Object) {
-	for _, obj := range objs {
-		_ = r.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil)
-		r.objects = append(r.objects, obj)
 	}
 }
 

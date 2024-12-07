@@ -22,7 +22,6 @@ func (f FinalizerHandler) Handle(req Request, resp Response) error {
 			if err := req.Client.Update(req.Ctx, obj); err != nil {
 				return err
 			}
-			resp.Objects(obj)
 		}
 		return nil
 	}
@@ -42,20 +41,8 @@ func (f FinalizerHandler) Handle(req Request, resp Response) error {
 	if newResp.Delay != 0 {
 		resp.RetryAfter(newResp.Delay)
 	}
-	if newResp.NoPrune {
-		resp.DisablePrune()
-	}
 	for k, v := range newResp.Attr {
 		resp.Attributes()[k] = v
-	}
-
-	for _, respObj := range newResp.Objs {
-		if ok, err := isObjectForRequest(req, respObj); err != nil {
-			return err
-		} else if ok {
-			newObj = respObj
-		}
-		resp.Objects(respObj)
 	}
 
 	if StatusChanged(obj, newObj) {
@@ -69,7 +56,6 @@ func (f FinalizerHandler) Handle(req Request, resp Response) error {
 		if err := req.Client.Update(req.Ctx, newObj); err != nil {
 			return err
 		}
-		resp.Objects(newObj)
 	}
 
 	return nil
