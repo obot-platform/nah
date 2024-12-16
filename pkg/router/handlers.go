@@ -3,7 +3,7 @@ package router
 import (
 	"sync"
 
-	"github.com/otto8-ai/nah/pkg/merr"
+	"github.com/acorn-io/nah/pkg/merr"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 

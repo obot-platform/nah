@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/otto8-ai/nah/pkg/log"
+	"github.com/acorn-io/nah/pkg/log"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"

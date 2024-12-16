@@ -3,7 +3,7 @@ package router
 import (
 	"reflect"
 
-	"github.com/otto8-ai/nah/pkg/backend"
+	"github.com/acorn-io/nah/pkg/backend"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"

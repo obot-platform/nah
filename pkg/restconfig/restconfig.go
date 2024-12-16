@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/otto8-ai/nah/pkg/ratelimit"
+	"github.com/acorn-io/nah/pkg/ratelimit"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/kubernetes/scheme"

@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/otto8-ai/nah/pkg/apply/objectset"
-	"github.com/otto8-ai/nah/pkg/merr"
+	"github.com/acorn-io/nah/pkg/apply/objectset"
+	"github.com/acorn-io/nah/pkg/merr"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"

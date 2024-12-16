@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/otto8-ai/nah/pkg/log"
+	"github.com/acorn-io/nah/pkg/log"
 	"gomodules.xyz/jsonpatch/v2"
 	v1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/api/errors"

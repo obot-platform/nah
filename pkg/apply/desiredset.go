@@ -3,7 +3,7 @@ package apply
 import (
 	"context"
 
-	"github.com/otto8-ai/nah/pkg/apply/objectset"
+	"github.com/acorn-io/nah/pkg/apply/objectset"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"

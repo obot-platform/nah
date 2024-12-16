@@ -12,8 +12,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/otto8-ai/nah/pkg/data"
-	"github.com/otto8-ai/nah/pkg/log"
+	"github.com/acorn-io/nah/pkg/data"
+	"github.com/acorn-io/nah/pkg/log"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

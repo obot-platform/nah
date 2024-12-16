@@ -3,7 +3,7 @@ package router
 import (
 	"context"
 
-	"github.com/otto8-ai/nah/pkg/backend"
+	"github.com/acorn-io/nah/pkg/backend"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"

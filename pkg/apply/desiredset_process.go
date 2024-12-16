@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/otto8-ai/nah/pkg/apply/objectset"
-	"github.com/otto8-ai/nah/pkg/log"
-	"github.com/otto8-ai/nah/pkg/merr"
+	"github.com/acorn-io/nah/pkg/apply/objectset"
+	"github.com/acorn-io/nah/pkg/log"
+	"github.com/acorn-io/nah/pkg/merr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
