@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/acorn-io/nah/pkg/log"
+	"github.com/obot-platform/nah/pkg/log"
 	"gomodules.xyz/jsonpatch/v2"
 	v1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/api/errors"

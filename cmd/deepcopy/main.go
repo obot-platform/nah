@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/acorn-io/nah/pkg/deepcopy"
+	"github.com/obot-platform/nah/pkg/deepcopy"
 )
 
 func main() {

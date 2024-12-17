@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acorn-io/nah/pkg/router"
-	"github.com/acorn-io/nah/pkg/yaml"
 	"github.com/hexops/autogold/v2"
+	"github.com/obot-platform/nah/pkg/router"
+	"github.com/obot-platform/nah/pkg/yaml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime"

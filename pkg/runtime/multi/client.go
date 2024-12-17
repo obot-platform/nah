@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/acorn-io/nah/pkg/uncached"
+	"github.com/obot-platform/nah/pkg/uncached"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"

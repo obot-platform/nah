@@ -3,8 +3,8 @@ package runtime
 import (
 	"time"
 
-	"github.com/acorn-io/nah/pkg/mapper"
-	"github.com/acorn-io/nah/pkg/runtime/multi"
+	"github.com/obot-platform/nah/pkg/mapper"
+	"github.com/obot-platform/nah/pkg/runtime/multi"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/workqueue"

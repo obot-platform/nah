@@ -1,4 +1,4 @@
-module github.com/acorn-io/nah
+module github.com/obot-platform/nah
 
 go 1.23
 

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/acorn-io/nah/pkg/log"
+	"github.com/obot-platform/nah/pkg/log"
 )
 
 var healthz struct {

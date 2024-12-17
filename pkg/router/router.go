@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/acorn-io/nah/pkg/backend"
-	"github.com/acorn-io/nah/pkg/leader"
+	"github.com/obot-platform/nah/pkg/backend"
+	"github.com/obot-platform/nah/pkg/leader"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
