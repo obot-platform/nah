@@ -60,9 +60,9 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Conf
 
 	factory := NewSharedControllerFactory(aggUncachedClient, aggCache, &SharedControllerFactoryOptions{
 		// In baaah this is only invoked when a key fails to process
-		DefaultRateLimiter: workqueue.NewMaxOfRateLimiter(
+		DefaultRateLimiter: workqueue.NewTypedMaxOfRateLimiter(
 			// This will go .5, 1, 2, 4, 8 seconds, etc up until 15 minutes
-			workqueue.NewItemExponentialFailureRateLimiter(500*time.Millisecond, 15*time.Minute),
+			workqueue.NewTypedItemExponentialFailureRateLimiter[any](500*time.Millisecond, 15*time.Minute),
 		),
 	})
 
