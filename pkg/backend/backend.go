@@ -29,6 +29,7 @@ type Backend interface {
 
 	Start(ctx context.Context) error
 	GVKForObject(obj runtime.Object, scheme *runtime.Scheme) (schema.GroupVersionKind, error)
+	EnqueueObject(obj runtime.Object) error
 }
 
 type CacheFactory interface {

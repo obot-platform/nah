@@ -87,6 +87,20 @@ func (b *Backend) Trigger(gvk schema.GroupVersionKind, key string, delay time.Du
 	return nil
 }
 
+func (b *Backend) EnqueueObject(obj runtime.Object) error {
+	gvk, err := b.GroupVersionKindFor(obj)
+	if err != nil {
+		return err
+	}
+
+	cObj, ok := obj.(kclient.Object)
+	if !ok {
+		return nil
+	}
+
+	return b.Trigger(gvk, keyFunc(cObj.GetNamespace(), cObj.GetName()), 0)
+}
+
 func (b *Backend) addIndexer(ctx context.Context, gvk schema.GroupVersionKind) error {
 	obj, err := b.Scheme().New(gvk)
 	if err != nil {
