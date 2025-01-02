@@ -96,7 +96,6 @@ func ErrorMiddleware() router.Middleware {
 					Message:            logErr.Error(),
 				})
 				resp.Attributes()["_errormiddleware:errored"] = true
-				resp.DisablePrune()
 				return nil
 			}
 

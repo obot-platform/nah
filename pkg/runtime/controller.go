@@ -49,8 +49,8 @@ type controller struct {
 	startLock sync.Mutex
 
 	name         string
-	workqueue    workqueue.RateLimitingInterface
-	rateLimiter  workqueue.RateLimiter
+	workqueue    workqueue.TypedRateLimitingInterface[any]
+	rateLimiter  workqueue.TypedRateLimiter[any]
 	informer     cache.Informer
 	handler      Handler
 	gvk          schema.GroupVersionKind
@@ -67,7 +67,7 @@ type startKey struct {
 }
 
 type Options struct {
-	RateLimiter workqueue.RateLimiter
+	RateLimiter workqueue.TypedRateLimiter[any]
 }
 
 func New(gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache, handler Handler, opts *Options) (Controller, error) {
@@ -110,9 +110,9 @@ func applyDefaultOptions(opts *Options) *Options {
 		newOpts = *opts
 	}
 	if newOpts.RateLimiter == nil {
-		newOpts.RateLimiter = workqueue.NewMaxOfRateLimiter(
-			workqueue.NewItemFastSlowRateLimiter(time.Millisecond, maxTimeout2min, 30),
-			workqueue.NewItemExponentialFailureRateLimiter(5*time.Millisecond, 30*time.Second),
+		newOpts.RateLimiter = workqueue.NewTypedMaxOfRateLimiter(
+			workqueue.NewTypedItemFastSlowRateLimiter[any](time.Millisecond, maxTimeout2min, 30),
+			workqueue.NewTypedItemExponentialFailureRateLimiter[any](5*time.Millisecond, 30*time.Second),
 		)
 	}
 	return &newOpts
@@ -136,7 +136,7 @@ func (c *controller) run(ctx context.Context, workers int) {
 	// will create a goroutine under the hood.  It we instantiate a workqueue we must have
 	// a mechanism to Shutdown it down.  Without the stopCh we don't know when to shutdown
 	// the queue and release the goroutine
-	c.workqueue = workqueue.NewNamedRateLimitingQueue(c.rateLimiter, c.name)
+	c.workqueue = workqueue.NewTypedRateLimitingQueueWithConfig(c.rateLimiter, workqueue.TypedRateLimitingQueueConfig[any]{Name: c.name})
 	for _, start := range c.startKeys {
 		if start.after == 0 {
 			c.workqueue.Add(start.key)

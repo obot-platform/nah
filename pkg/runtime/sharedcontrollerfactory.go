@@ -16,10 +16,10 @@ type SharedControllerFactory interface {
 }
 
 type SharedControllerFactoryOptions struct {
-	DefaultRateLimiter workqueue.RateLimiter
+	DefaultRateLimiter workqueue.TypedRateLimiter[any]
 	DefaultWorkers     int
 
-	KindRateLimiter map[schema.GroupVersionKind]workqueue.RateLimiter
+	KindRateLimiter map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
 	KindWorkers     map[schema.GroupVersionKind]int
 }
 
@@ -32,9 +32,9 @@ type sharedControllerFactory struct {
 	client       kclient.Client
 	controllers  map[schema.GroupVersionKind]*sharedController
 
-	rateLimiter     workqueue.RateLimiter
+	rateLimiter     workqueue.TypedRateLimiter[any]
 	workers         int
-	kindRateLimiter map[schema.GroupVersionKind]workqueue.RateLimiter
+	kindRateLimiter map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
 	kindWorkers     map[schema.GroupVersionKind]int
 }
 
