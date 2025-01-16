@@ -74,9 +74,17 @@ func (w *writer) Update(ctx context.Context, obj kclient.Object, opts ...kclient
 	return w.client.Update(ctx, obj, opts...)
 }
 
-func (w *writer) Create(ctx context.Context, obj kclient.Object, opts ...kclient.CreateOption) error {
-	if err := w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
-		return err
+func (w *writer) Create(ctx context.Context, obj kclient.Object, opts ...kclient.CreateOption) (err error) {
+	if obj.GetName() == "" {
+		defer func() {
+			if err != nil {
+				err = w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil)
+			}
+		}()
+	} else {
+		if err = w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+			return err
+		}
 	}
 	return w.client.Create(ctx, obj, opts...)
 }
