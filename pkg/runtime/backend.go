@@ -48,7 +48,15 @@ func newBackend(cacheFactory SharedControllerFactory, client *cacheClient, cache
 	}
 }
 
-func (b *Backend) Start(ctx context.Context) (err error) {
+func (b *Backend) Start(ctx context.Context) error {
+	return b.start(ctx, false)
+}
+
+func (b *Backend) Preload(ctx context.Context) error {
+	return b.start(ctx, true)
+}
+
+func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
 	b.startedLock.Lock()
 	defer b.startedLock.Unlock()
 	defer func() {
@@ -56,7 +64,12 @@ func (b *Backend) Start(ctx context.Context) (err error) {
 			b.started = true
 		}
 	}()
-	if err := b.cacheFactory.Start(ctx, DefaultThreadiness); err != nil {
+	if preloadOnly {
+		err = b.cacheFactory.Preload(ctx)
+	} else {
+		err = b.cacheFactory.Start(ctx, DefaultThreadiness)
+	}
+	if err != nil {
 		return err
 	}
 	if !b.cache.WaitForCacheSync(ctx) {

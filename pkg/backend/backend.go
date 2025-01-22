@@ -27,6 +27,7 @@ type Backend interface {
 	kclient.WithWatch
 	kclient.FieldIndexer
 
+	Preload(ctx context.Context) error
 	Start(ctx context.Context) error
 	GVKForObject(obj runtime.Object, scheme *runtime.Scheme) (schema.GroupVersionKind, error)
 }
