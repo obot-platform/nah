@@ -52,7 +52,7 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 	}
 }
 
-func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader, onSwitchLeader OnNewLeader) error {
+func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader, onSwitchLeader OnNewLeader, signalDone chan struct{}) error {
 	if ec == nil {
 		// Don't start leader election if there is no config.
 		return onLeader(ctx)
@@ -62,14 +62,14 @@ func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader,
 		ec.Namespace = "kube-system"
 	}
 
-	if err := ec.run(ctx, id, onLeader, onSwitchLeader); err != nil {
+	if err := ec.run(ctx, id, onLeader, onSwitchLeader, signalDone); err != nil {
 		return fmt.Errorf("failed to start leader election for %s: %v", ec.Name, err)
 	}
 
 	return nil
 }
 
-func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader) error {
+func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone chan struct{}) error {
 	rl, err := resourcelock.NewFromKubeconfig(
 		ec.ResourceLockType,
 		ec.Namespace,
@@ -97,7 +97,7 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 		Lock:          rl,
 		LeaseDuration: ec.TTL,
 		RenewDeadline: ec.TTL / 2,
-		RetryPeriod:   ec.TTL / 4,
+		RetryPeriod:   2 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				if err := cb(ctx); err != nil {
@@ -123,7 +123,7 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 					// a restart.
 					// The pattern found here can be found inside the kube-scheduler.
 					log.Infof("requested to terminate, exiting")
-					os.Exit(0)
+					close(signalDone)
 				default:
 					log.Fatalf("leader election lost for %s", ec.Name)
 				}

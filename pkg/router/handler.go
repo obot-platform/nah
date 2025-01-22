@@ -82,6 +82,10 @@ func (m *HandlerSet) Start(ctx context.Context) error {
 	return m.backend.Start(ctx)
 }
 
+func (m *HandlerSet) Preload(ctx context.Context) error {
+	return m.backend.Preload(ctx)
+}
+
 func toObject(obj runtime.Object) kclient.Object {
 	if obj == nil {
 		return nil

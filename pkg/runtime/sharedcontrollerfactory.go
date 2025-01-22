@@ -12,6 +12,7 @@ import (
 
 type SharedControllerFactory interface {
 	ForKind(gvk schema.GroupVersionKind) (SharedController, error)
+	Preload(ctx context.Context) error
 	Start(ctx context.Context, workers int) error
 }
 
@@ -61,8 +62,15 @@ func applyDefaultSharedOptions(opts *SharedControllerFactoryOptions) *SharedCont
 	}
 	return &newOpts
 }
+func (s *sharedControllerFactory) Preload(ctx context.Context) error {
+	return s.start(ctx, 0)
+}
 
 func (s *sharedControllerFactory) Start(ctx context.Context, defaultWorkers int) error {
+	return s.start(ctx, defaultWorkers)
+}
+
+func (s *sharedControllerFactory) start(ctx context.Context, defaultWorkers int) error {
 	s.controllerLock.Lock()
 	defer s.controllerLock.Unlock()
 
@@ -91,13 +99,15 @@ func (s *sharedControllerFactory) Start(ctx context.Context, defaultWorkers int)
 	s.cache.WaitForCacheSync(ctx)
 	s.controllerLock.Lock()
 
-	for gvk, controller := range controllersCopy {
-		w, err := s.getWorkers(gvk, defaultWorkers)
-		if err != nil {
-			return err
-		}
-		if err := controller.Start(ctx, w); err != nil {
-			return err
+	if defaultWorkers != 0 {
+		for gvk, controller := range controllersCopy {
+			w, err := s.getWorkers(gvk, defaultWorkers)
+			if err != nil {
+				return err
+			}
+			if err := controller.Start(ctx, w); err != nil {
+				return err
+			}
 		}
 	}
 

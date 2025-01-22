@@ -9,6 +9,7 @@ import (
 
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/leader"
+	"github.com/obot-platform/nah/pkg/log"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,6 +22,9 @@ type Router struct {
 	handlers       *HandlerSet
 	electionConfig *leader.ElectionConfig
 	hasHealthz     bool
+	postStarts     []func(context.Context, kclient.Client)
+	signalStopped  chan struct{}
+	cancel         func()
 }
 
 // New returns a new *Router with given HandlerSet and ElectionConfig. Passing a nil ElectionConfig is valid and results
@@ -32,6 +36,7 @@ func New(handlerSet *HandlerSet, electionConfig *leader.ElectionConfig, healthzP
 	r := &Router{
 		handlers:       handlerSet,
 		electionConfig: electionConfig,
+		signalStopped:  make(chan struct{}),
 	}
 
 	if healthzPort > 0 {
@@ -41,6 +46,10 @@ func New(handlerSet *HandlerSet, electionConfig *leader.ElectionConfig, healthzP
 
 	r.RouteBuilder.router = r
 	return r
+}
+
+func (r *Router) Stopped() <-chan struct{} {
+	return r.signalStopped
 }
 
 func (r *Router) Backend() backend.Backend {
@@ -178,6 +187,10 @@ func (r RouteBuilder) Handler(h Handler) {
 }
 
 func (r *Router) Start(ctx context.Context) error {
+	if r.cancel != nil {
+		return fmt.Errorf("router already started")
+	}
+
 	id, err := os.Hostname()
 	if err != nil {
 		return err
@@ -189,13 +202,19 @@ func (r *Router) Start(ctx context.Context) error {
 
 	r.handlers.onError = r.OnErrorHandler
 
+	ctx, r.cancel = context.WithCancel(ctx)
+
 	// It's OK to start the electionConfig even if it's nil.
 	return r.electionConfig.Run(ctx, id, r.startHandlers, func(leader string) {
-		// I am not the leader, so I am healthy until my controllers are started.
+		// I am not the leader, so I am healthy when my cache is ready.
+		if err := r.handlers.Preload(ctx); err != nil {
+			// Failed to preload caches, panic
+			log.Fatalf("failed to preload caches: %v", err)
+		}
 		if r.hasHealthz {
 			setHealthy(r.name, id != leader)
 		}
-	})
+	}, r.signalStopped)
 }
 
 // startHandlers gets called when we become the leader or if there is no leader election.
@@ -207,9 +226,14 @@ func (r *Router) startHandlers(ctx context.Context) error {
 		defer setHealthy(r.name, err == nil)
 	}
 
-	err = r.handlers.Start(ctx)
+	if err = r.handlers.Start(ctx); err != nil {
+		return err
+	}
 
-	return err
+	for _, f := range r.postStarts {
+		f(ctx, r.Backend())
+	}
+	return nil
 }
 
 func (r *Router) Handle(objType kclient.Object, h Handler) {
@@ -220,6 +244,10 @@ func (r *Router) Handle(objType kclient.Object, h Handler) {
 func (r *Router) HandleFunc(objType kclient.Object, h HandlerFunc) {
 	r.routeName = name()
 	r.RouteBuilder.Type(objType).Handler(h)
+}
+
+func (r *Router) PosStart(f func(context.Context, kclient.Client)) {
+	r.postStarts = append(r.postStarts, f)
 }
 
 type IgnoreNilHandler struct {
