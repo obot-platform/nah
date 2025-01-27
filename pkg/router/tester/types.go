@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/obot-platform/nah/pkg/router"
-	"github.com/obot-platform/nah/pkg/uncached"
+	"github.com/obot-platform/nah/pkg/untriggered"
 	"golang.org/x/exp/maps"
 	"k8s.io/apimachinery/pkg/api/errors"
 	meta2 "k8s.io/apimachinery/pkg/api/meta"
@@ -38,7 +38,7 @@ func (c Client) objects() []kclient.Object {
 }
 
 func (c *Client) Get(ctx context.Context, key kclient.ObjectKey, out kclient.Object, opts ...kclient.GetOption) error {
-	if u, ok := out.(*uncached.Holder); ok {
+	if u, ok := out.(*untriggered.Holder); ok {
 		out = u.Object
 	}
 	t := reflect.TypeOf(out)
@@ -73,7 +73,7 @@ func copy(dest, src kclient.Object) {
 }
 
 func (c *Client) List(ctx context.Context, objList kclient.ObjectList, opts ...kclient.ListOption) error {
-	if u, ok := objList.(*uncached.HolderList); ok {
+	if u, ok := objList.(*untriggered.HolderList); ok {
 		objList = u.ObjectList
 	}
 

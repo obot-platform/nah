@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/obot-platform/nah/pkg/uncached"
+	"github.com/obot-platform/nah/pkg/untriggered"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -115,8 +115,11 @@ func (c *cacheClient) store(obj kclient.Object) {
 }
 
 func (c *cacheClient) Get(ctx context.Context, key kclient.ObjectKey, obj kclient.Object, opts ...kclient.GetOption) error {
-	if u, ok := obj.(*uncached.Holder); ok {
-		return c.uncached.Get(ctx, key, u.Object, opts...)
+	if u, ok := obj.(*untriggered.Holder); ok {
+		obj = u.Object
+		if u.IsUncached() {
+			return c.uncached.Get(ctx, key, obj, opts...)
+		}
 	}
 
 	getErr := c.cached.Get(ctx, key, obj)
@@ -155,15 +158,21 @@ func (c *cacheClient) Get(ctx context.Context, key kclient.ObjectKey, obj kclien
 }
 
 func (c *cacheClient) List(ctx context.Context, list kclient.ObjectList, opts ...kclient.ListOption) error {
-	if u, ok := list.(*uncached.HolderList); ok {
-		return c.uncached.List(ctx, u.ObjectList, opts...)
+	if u, ok := list.(*untriggered.HolderList); ok {
+		list = u.ObjectList
+		if u.IsUncached() {
+			return c.uncached.List(ctx, u, opts...)
+		}
 	}
 	return c.cached.List(ctx, list, opts...)
 }
 
 func (c *cacheClient) Create(ctx context.Context, obj kclient.Object, opts ...kclient.CreateOption) error {
-	if u, ok := obj.(*uncached.Holder); ok {
-		return c.uncached.Create(ctx, u.Object, opts...)
+	if u, ok := obj.(*untriggered.Holder); ok {
+		obj = u.Object
+		if u.IsUncached() {
+			return c.uncached.Create(ctx, obj, opts...)
+		}
 	}
 	err := c.cached.Create(ctx, obj, opts...)
 	if err != nil {
@@ -174,8 +183,11 @@ func (c *cacheClient) Create(ctx context.Context, obj kclient.Object, opts ...kc
 }
 
 func (c *cacheClient) Delete(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteOption) error {
-	if u, ok := obj.(*uncached.Holder); ok {
-		return c.uncached.Delete(ctx, u.Object, opts...)
+	if u, ok := obj.(*untriggered.Holder); ok {
+		obj = u.Object
+		if u.IsUncached() {
+			return c.uncached.Delete(ctx, obj, opts...)
+		}
 	}
 	err := c.cached.Delete(ctx, obj, opts...)
 	if err != nil {
@@ -186,8 +198,11 @@ func (c *cacheClient) Delete(ctx context.Context, obj kclient.Object, opts ...kc
 }
 
 func (c *cacheClient) Update(ctx context.Context, obj kclient.Object, opts ...kclient.UpdateOption) error {
-	if u, ok := obj.(*uncached.Holder); ok {
-		return c.uncached.Update(ctx, u.Object, opts...)
+	if u, ok := obj.(*untriggered.Holder); ok {
+		obj = u.Object
+		if u.IsUncached() {
+			return c.uncached.Update(ctx, obj, opts...)
+		}
 	}
 	err := c.cached.Update(ctx, obj, opts...)
 	if err != nil {
@@ -198,8 +213,11 @@ func (c *cacheClient) Update(ctx context.Context, obj kclient.Object, opts ...kc
 }
 
 func (c *cacheClient) Patch(ctx context.Context, obj kclient.Object, patch kclient.Patch, opts ...kclient.PatchOption) error {
-	if u, ok := obj.(*uncached.Holder); ok {
-		return c.uncached.Patch(ctx, u.Object, patch, opts...)
+	if u, ok := obj.(*untriggered.Holder); ok {
+		obj = u.Object
+		if u.IsUncached() {
+			return c.uncached.Patch(ctx, obj, patch, opts...)
+		}
 	}
 	err := c.cached.Patch(ctx, obj, patch, opts...)
 	if err != nil {
@@ -210,6 +228,12 @@ func (c *cacheClient) Patch(ctx context.Context, obj kclient.Object, patch kclie
 }
 
 func (c *cacheClient) DeleteAllOf(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteAllOfOption) error {
+	if u, ok := obj.(*untriggered.Holder); ok {
+		obj = u.Object
+		if u.IsUncached() {
+			return c.uncached.DeleteAllOf(ctx, obj, opts...)
+		}
+	}
 	return c.cached.DeleteAllOf(ctx, obj, opts...)
 }
 
@@ -248,15 +272,15 @@ type subResourceClient struct {
 }
 
 func (s *subResourceClient) Get(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceGetOption) error {
-	return s.reader.Get(ctx, uncached.Unwrap(obj).(kclient.Object), subResource, opts...)
+	return s.reader.Get(ctx, untriggered.Unwrap(obj).(kclient.Object), subResource, opts...)
 }
 
 func (s *subResourceClient) Create(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceCreateOption) error {
-	return s.writer.Create(ctx, uncached.Unwrap(obj).(kclient.Object), subResource, opts...)
+	return s.writer.Create(ctx, untriggered.Unwrap(obj).(kclient.Object), subResource, opts...)
 }
 
 func (s *subResourceClient) Update(ctx context.Context, obj kclient.Object, opts ...kclient.SubResourceUpdateOption) error {
-	err := s.writer.Update(ctx, uncached.Unwrap(obj).(kclient.Object), opts...)
+	err := s.writer.Update(ctx, untriggered.Unwrap(obj).(kclient.Object), opts...)
 	if err != nil {
 		return err
 	}
@@ -265,7 +289,7 @@ func (s *subResourceClient) Update(ctx context.Context, obj kclient.Object, opts
 }
 
 func (s *subResourceClient) Patch(ctx context.Context, obj kclient.Object, patch kclient.Patch, opts ...kclient.SubResourcePatchOption) error {
-	err := s.writer.Patch(ctx, uncached.Unwrap(obj).(kclient.Object), patch, opts...)
+	err := s.writer.Patch(ctx, untriggered.Unwrap(obj).(kclient.Object), patch, opts...)
 	if err != nil {
 		return err
 	}
