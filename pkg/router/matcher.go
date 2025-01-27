@@ -13,6 +13,17 @@ type objectMatcher struct {
 	Fields    fields.Selector
 }
 
+func (o *objectMatcher) String() string {
+	s := o.Name + "/" + o.Namespace
+	if o.Selector != nil {
+		s += "/label selectors" + o.Selector.String()
+	}
+	if o.Fields != nil {
+		s += "/field selectors" + o.Fields.String()
+	}
+	return s
+}
+
 func (o *objectMatcher) Equals(other objectMatcher) bool {
 	if o.Name != other.Name {
 		return false

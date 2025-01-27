@@ -6,7 +6,7 @@ import (
 
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/log"
-	"github.com/obot-platform/nah/pkg/uncached"
+	"github.com/obot-platform/nah/pkg/untriggered"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -16,7 +16,7 @@ import (
 
 type triggers struct {
 	lock      sync.RWMutex
-	matchers  map[schema.GroupVersionKind]map[enqueueTarget][]objectMatcher
+	matchers  map[schema.GroupVersionKind]map[enqueueTarget]map[string]objectMatcher
 	trigger   backend.Trigger
 	gvkLookup backend.Backend
 	scheme    *runtime.Scheme
@@ -36,15 +36,15 @@ func (m *triggers) invokeTriggers(req Request) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
-	for enqueueTarget, matchers := range m.matchers[req.GVK] {
-		if enqueueTarget.gvk == req.GVK &&
-			enqueueTarget.key == req.Key {
+	for et, matchers := range m.matchers[req.GVK] {
+		if et.gvk == req.GVK &&
+			et.key == req.Key {
 			continue
 		}
 		for _, matcher := range matchers {
 			if matcher.Match(req.Namespace, req.Name, req.Object) {
-				log.Debugf("Triggering [%s] [%v] from [%s] [%v]", enqueueTarget.key, enqueueTarget.gvk, req.Key, req.GVK)
-				_ = m.trigger.Trigger(enqueueTarget.gvk, enqueueTarget.key, 0)
+				log.Debugf("Triggering [%s] [%v] from [%s] [%v]", et.key, et.gvk, req.Key, req.GVK)
+				_ = m.trigger.Trigger(et.gvk, et.key, 0)
 				break
 			}
 		}
@@ -61,15 +61,20 @@ func (m *triggers) register(gvk schema.GroupVersionKind, key string, targetGVK s
 	}
 	matchers, ok := m.matchers[targetGVK]
 	if !ok {
-		matchers = map[enqueueTarget][]objectMatcher{}
+		matchers = map[enqueueTarget]map[string]objectMatcher{}
 		m.matchers[targetGVK] = matchers
 	}
-	for _, existing := range matchers[target] {
-		if existing.Equals(mr) {
-			return
-		}
+
+	matcherKey := mr.String()
+	if _, ok := matchers[target][matcherKey]; ok {
+		return
 	}
-	matchers[target] = append(matchers[target], mr)
+
+	if matchers[target] == nil {
+		matchers[target] = map[string]objectMatcher{}
+	}
+
+	matchers[target][matcherKey] = mr
 }
 
 func (m *triggers) Trigger(req Request) {
@@ -79,7 +84,7 @@ func (m *triggers) Trigger(req Request) {
 }
 
 func (m *triggers) Register(sourceGVK schema.GroupVersionKind, key string, obj runtime.Object, namespace, name string, selector labels.Selector, fields fields.Selector) (schema.GroupVersionKind, bool, error) {
-	if uncached.IsWrapped(obj) {
+	if untriggered.IsWrapped(obj) {
 		return schema.GroupVersionKind{}, false, nil
 	}
 	gvk, err := m.gvkLookup.GVKForObject(obj, m.scheme)
@@ -107,7 +112,7 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	remainingMatchers := map[schema.GroupVersionKind]map[enqueueTarget][]objectMatcher{}
+	remainingMatchers := map[schema.GroupVersionKind]map[enqueueTarget]map[string]objectMatcher{}
 
 	for targetGVK, matchers := range m.matchers {
 		for target, mts := range matchers {
@@ -119,9 +124,12 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 				if targetGVK != req.GVK || mt.Namespace != req.Namespace || mt.Name != req.Name {
 					// If the matcher matches the deleted object exactly, then skip the matcher.
 					if remainingMatchers[targetGVK] == nil {
-						remainingMatchers[targetGVK] = make(map[enqueueTarget][]objectMatcher)
+						remainingMatchers[targetGVK] = make(map[enqueueTarget]map[string]objectMatcher)
 					}
-					remainingMatchers[targetGVK][target] = append(remainingMatchers[targetGVK][target], mt)
+					if remainingMatchers[targetGVK][target] == nil {
+						remainingMatchers[targetGVK][target] = make(map[string]objectMatcher)
+					}
+					remainingMatchers[targetGVK][target][mt.String()] = mt
 				}
 				if targetGVK == req.GVK && mt.Match(req.Namespace, req.Name, req.Object) {
 					log.Debugf("Triggering [%s] [%v] from [%s] [%v] on delete", target.key, target.gvk, req.Key, req.GVK)

@@ -59,7 +59,7 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 			handlers: map[schema.GroupVersionKind][]Handler{},
 		},
 		triggers: triggers{
-			matchers:  map[schema.GroupVersionKind]map[enqueueTarget][]objectMatcher{},
+			matchers:  map[schema.GroupVersionKind]map[enqueueTarget]map[string]objectMatcher{},
 			trigger:   backend,
 			gvkLookup: backend,
 			scheme:    scheme,
@@ -317,7 +317,7 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 	}
 
 	if unmodifiedObject == nil {
-		// A nil object here means tha the object was deleted, so unregister the triggers
+		// A nil object here means that the object was deleted, so unregister the triggers
 		m.triggers.UnregisterAndTrigger(req)
 	} else {
 		m.triggers.Trigger(req)

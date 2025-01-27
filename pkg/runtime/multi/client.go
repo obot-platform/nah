@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/obot-platform/nah/pkg/uncached"
+	"github.com/obot-platform/nah/pkg/untriggered"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -155,7 +155,7 @@ func (m multiClient) Watch(ctx context.Context, obj kclient.ObjectList, opts ...
 }
 
 func (m multiClient) getClient(obj runtime.Object) (kclient.WithWatch, error) {
-	gvk, err := m.GroupVersionKindFor(uncached.Unwrap(obj))
+	gvk, err := m.GroupVersionKindFor(untriggered.Unwrap(obj))
 	if err != nil {
 		return nil, err
 	}

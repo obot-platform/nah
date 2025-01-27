@@ -12,7 +12,7 @@ import (
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/fields"
 	"github.com/obot-platform/nah/pkg/router"
-	"github.com/obot-platform/nah/pkg/uncached"
+	"github.com/obot-platform/nah/pkg/untriggered"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kcache "k8s.io/client-go/tools/cache"
@@ -167,7 +167,7 @@ func (b *Backend) IsObjectNamespaced(obj runtime.Object) (bool, error) {
 }
 
 func (b *Backend) GVKForObject(obj runtime.Object, scheme *runtime.Scheme) (schema.GroupVersionKind, error) {
-	return apiutil.GVKForObject(uncached.Unwrap(obj), scheme)
+	return apiutil.GVKForObject(untriggered.Unwrap(obj), scheme)
 }
 
 func (b *Backend) IndexField(ctx context.Context, obj kclient.Object, field string, extractValue kclient.IndexerFunc) error {
