@@ -39,7 +39,7 @@ func setHealthy(name string, healthy bool) {
 	healthz.healths[name] = healthy
 }
 
-func getHealthy() bool {
+func GetHealthy() bool {
 	healthz.lock.RLock()
 	defer healthz.lock.RUnlock()
 	for _, healthy := range healthz.healths {
@@ -47,7 +47,7 @@ func getHealthy() bool {
 			return false
 		}
 	}
-	return true
+	return len(healthz.healths) > 0
 }
 
 // startHealthz starts a healthz server on the healthzPort. If the server is already running, then this is a no-op.
@@ -65,7 +65,7 @@ func startHealthz(ctx context.Context) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, req *http.Request) {
-		if getHealthy() {
+		if GetHealthy() {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

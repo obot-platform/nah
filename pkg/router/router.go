@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/leader"
@@ -21,10 +22,9 @@ type Router struct {
 	OnErrorHandler ErrorHandler
 	handlers       *HandlerSet
 	electionConfig *leader.ElectionConfig
-	hasHealthz     bool
+	startLock      sync.Mutex
 	postStarts     []func(context.Context, kclient.Client)
 	signalStopped  chan struct{}
-	cancel         func()
 }
 
 // New returns a new *Router with given HandlerSet and ElectionConfig. Passing a nil ElectionConfig is valid and results
@@ -41,7 +41,6 @@ func New(handlerSet *HandlerSet, electionConfig *leader.ElectionConfig, healthzP
 
 	if healthzPort > 0 {
 		setPort(healthzPort)
-		r.hasHealthz = true
 	}
 
 	r.RouteBuilder.router = r
@@ -187,44 +186,43 @@ func (r RouteBuilder) Handler(h Handler) {
 }
 
 func (r *Router) Start(ctx context.Context) error {
-	if r.cancel != nil {
-		return fmt.Errorf("router already started")
-	}
-
 	id, err := os.Hostname()
 	if err != nil {
 		return err
 	}
 
-	if r.hasHealthz {
-		startHealthz(ctx)
-	}
+	startHealthz(ctx)
 
 	r.handlers.onError = r.OnErrorHandler
 
-	ctx, r.cancel = context.WithCancel(ctx)
-
 	// It's OK to start the electionConfig even if it's nil.
 	return r.electionConfig.Run(ctx, id, r.startHandlers, func(leader string) {
+		if id == leader {
+			return
+		}
+
+		r.startLock.Lock()
+		defer r.startLock.Unlock()
+
+		setHealthy(r.name, false)
+		defer setHealthy(r.name, true)
 		// I am not the leader, so I am healthy when my cache is ready.
 		if err := r.handlers.Preload(ctx); err != nil {
 			// Failed to preload caches, panic
 			log.Fatalf("failed to preload caches: %v", err)
-		}
-		if r.hasHealthz {
-			setHealthy(r.name, id != leader)
 		}
 	}, r.signalStopped)
 }
 
 // startHandlers gets called when we become the leader or if there is no leader election.
 func (r *Router) startHandlers(ctx context.Context) error {
+	r.startLock.Lock()
+	defer r.startLock.Unlock()
+
 	var err error
 	// This is the leader now, so not ready until the controller is started and caches are ready.
-	if r.hasHealthz {
-		setHealthy(r.name, false)
-		defer setHealthy(r.name, err == nil)
-	}
+	setHealthy(r.name, false)
+	defer setHealthy(r.name, err == nil)
 
 	if err = r.handlers.Start(ctx); err != nil {
 		return err
