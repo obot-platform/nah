@@ -75,7 +75,9 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 }
 
 func (m *HandlerSet) Start(ctx context.Context) error {
-	m.ctx = ctx
+	if m.ctx == nil {
+		m.ctx = ctx
+	}
 	if err := m.WatchGVK(m.handlers.GVKs()...); err != nil {
 		return err
 	}
@@ -83,6 +85,12 @@ func (m *HandlerSet) Start(ctx context.Context) error {
 }
 
 func (m *HandlerSet) Preload(ctx context.Context) error {
+	if m.ctx == nil {
+		m.ctx = ctx
+	}
+	if err := m.WatchGVK(m.handlers.GVKs()...); err != nil {
+		return err
+	}
 	return m.backend.Preload(ctx)
 }
 
@@ -253,7 +261,7 @@ func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeOb
 	}
 
 	if !fromReplay && !fromTrigger {
-		// Process delay have key has be reassigned from the TriggerPrefix
+		// Process delay have key has been reassigned from the TriggerPrefix
 		if !m.checkDelay(gvk, key) {
 			return runtimeObject, nil
 		}
