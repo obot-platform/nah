@@ -1,0 +1,1 @@
+DELETE FROM handler_name_placeholder_matchers WHERE generation < $3 AND target_api_version = $2 AND target_kind = $3 AND target_key = $4;

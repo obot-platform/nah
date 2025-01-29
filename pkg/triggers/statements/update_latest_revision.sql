@@ -1,0 +1,1 @@
+INSERT INTO handler_name_latest_revisions(kind, revision, generation) VALUES ($1, $2, $3) ON CONFLICT (kind) DO UPDATE SET (revision, generation) = (EXCLUDED.revision, EXCLUDED.generation);

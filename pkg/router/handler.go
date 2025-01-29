@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/log"
 	"github.com/obot-platform/nah/pkg/merr"
+	"github.com/obot-platform/nah/pkg/triggers"
 	"golang.org/x/exp/maps"
 	"golang.org/x/time/rate"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -22,8 +24,9 @@ import (
 )
 
 const (
-	TriggerPrefix = "_t "
-	ReplayPrefix  = "_r "
+	TriggerPrefix     = "_t "
+	ReplayPrefix      = "_r "
+	InitialListPrefix = "_i "
 )
 
 type HandlerSet struct {
@@ -32,12 +35,12 @@ type HandlerSet struct {
 	scheme   *runtime.Scheme
 	backend  backend.Backend
 	handlers handlers
-	triggers triggers
+	triggers *triggers.Triggers
 	save     save
 	onError  ErrorHandler
 
 	watchingLock sync.Mutex
-	watching     map[schema.GroupVersionKind]bool
+	watching     map[schema.GroupVersionKind]struct{}
 	locker       locker.Locker
 
 	limiterLock sync.Mutex
@@ -50,7 +53,7 @@ type limiterKey struct {
 	gvk schema.GroupVersionKind
 }
 
-func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend) *HandlerSet {
+func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend, db *sql.DB) (*HandlerSet, error) {
 	hs := &HandlerSet{
 		name:    name,
 		scheme:  scheme,
@@ -58,26 +61,21 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 		handlers: handlers{
 			handlers: map[schema.GroupVersionKind][]Handler{},
 		},
-		triggers: triggers{
-			matchers:  map[schema.GroupVersionKind]map[enqueueTarget]map[string]objectMatcher{},
-			trigger:   backend,
-			gvkLookup: backend,
-			scheme:    scheme,
-		},
 		save: save{
 			cache:  backend,
 			client: backend,
 		},
-		watching: map[schema.GroupVersionKind]bool{},
+		watching: map[schema.GroupVersionKind]struct{}{},
 	}
-	hs.triggers.watcher = hs
-	return hs
+
+	var err error
+	hs.triggers, err = triggers.New(name, scheme, backend, backend, hs, triggers.Options{DB: db})
+	return hs, err
 }
 
 func (m *HandlerSet) Start(ctx context.Context) error {
-	if m.ctx == nil {
-		m.ctx = ctx
-	}
+	m.setupContext(ctx)
+
 	if err := m.WatchGVK(m.handlers.GVKs()...); err != nil {
 		return err
 	}
@@ -85,13 +83,23 @@ func (m *HandlerSet) Start(ctx context.Context) error {
 }
 
 func (m *HandlerSet) Preload(ctx context.Context) error {
-	if m.ctx == nil {
-		m.ctx = ctx
-	}
+	m.setupContext(ctx)
+
 	if err := m.WatchGVK(m.handlers.GVKs()...); err != nil {
 		return err
 	}
 	return m.backend.Preload(ctx)
+}
+
+func (m *HandlerSet) setupContext(ctx context.Context) {
+	if m.ctx == nil {
+		m.ctx = ctx
+		context.AfterFunc(ctx, func() {
+			if err := m.triggers.Close(); err != nil {
+				log.Errorf("Error closing triggers: %v", err)
+			}
+		})
+	}
 }
 
 func toObject(obj runtime.Object) kclient.Object {
@@ -103,18 +111,19 @@ func toObject(obj runtime.Object) kclient.Object {
 }
 
 type triggerRegistry struct {
+	obj     runtime.Object
 	gvk     schema.GroupVersionKind
 	gvks    map[schema.GroupVersionKind]bool
 	key     string
-	trigger *triggers
+	trigger *triggers.Triggers
 }
 
 func (t *triggerRegistry) WatchingGVKs() []schema.GroupVersionKind {
 	return maps.Keys(t.gvks)
 
 }
-func (t *triggerRegistry) Watch(obj runtime.Object, namespace, name string, sel labels.Selector, fields fields.Selector) error {
-	gvk, ok, err := t.trigger.Register(t.gvk, t.key, obj, namespace, name, sel, fields)
+func (t *triggerRegistry) Watch(ctx context.Context, obj runtime.Object, namespace, name string, sel labels.Selector, fields fields.Selector) error {
+	gvk, ok, err := t.trigger.Register(ctx, t.gvk, t.key, t.obj, obj, namespace, name, sel, fields)
 	if err != nil {
 		return err
 	}
@@ -136,9 +145,10 @@ func (m *HandlerSet) newRequestResponse(gvk schema.GroupVersionKind, key string,
 	}
 
 	triggerRegistry := &triggerRegistry{
+		obj:     obj,
 		gvk:     gvk,
 		key:     key,
-		trigger: &m.triggers,
+		trigger: m.triggers,
 		gvks:    map[schema.GroupVersionKind]bool{},
 	}
 
@@ -187,11 +197,11 @@ func (m *HandlerSet) WatchGVK(gvks ...schema.GroupVersionKind) error {
 	var watchErrs []error
 	m.watchingLock.Lock()
 	for _, gvk := range gvks {
-		if m.watching[gvk] {
+		if _, ok := m.watching[gvk]; ok {
 			continue
 		}
 		if err := m.backend.Watcher(m.ctx, gvk, m.name, m.onChange); err == nil {
-			m.watching[gvk] = true
+			m.watching[gvk] = struct{}{}
 		} else {
 			watchErrs = append(watchErrs, err)
 		}
@@ -250,6 +260,7 @@ func (m *HandlerSet) forgetBackoff(gvk schema.GroupVersionKind, key string) {
 func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object) (runtime.Object, error) {
 	fromTrigger := false
 	fromReplay := false
+	initialList := false
 	if strings.HasPrefix(key, TriggerPrefix) {
 		fromTrigger = true
 		key = strings.TrimPrefix(key, TriggerPrefix)
@@ -258,6 +269,12 @@ func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeOb
 		fromTrigger = false
 		fromReplay = true
 		key = strings.TrimPrefix(key, ReplayPrefix)
+	}
+	if strings.HasPrefix(key, InitialListPrefix) {
+		fromTrigger = false
+		fromReplay = false
+		initialList = true
+		key = strings.TrimPrefix(key, InitialListPrefix)
 	}
 
 	if !fromReplay && !fromTrigger {
@@ -291,9 +308,14 @@ func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeOb
 
 	if runtimeObject == nil {
 		m.forgetBackoff(gvk, key)
+	} else if initialList {
+		if should, err := m.triggers.ShouldHandle(m.ctx, gvk, runtimeObject.(kclient.Object)); err == nil && !should {
+			log.Debugf("Not handling object [%s/%s] [%v], resource version %s is too old", ns, name, gvk, runtimeObject.(kclient.Object).GetResourceVersion())
+			return runtimeObject, nil
+		}
 	}
 
-	return m.handle(gvk, key, runtimeObject, fromTrigger)
+	return m.handle(gvk, key, runtimeObject, fromTrigger, initialList)
 }
 
 func (m *HandlerSet) handleError(req Request, resp Response, err error) error {
@@ -303,7 +325,7 @@ func (m *HandlerSet) handleError(req Request, resp Response, err error) error {
 	return err
 }
 
-func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedObject runtime.Object, trigger bool) (runtime.Object, error) {
+func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedObject runtime.Object, trigger, initialList bool) (runtime.Object, error) {
 	req, resp, err := m.newRequestResponse(gvk, key, unmodifiedObject, trigger)
 	if err != nil {
 		return nil, err
@@ -326,9 +348,9 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 
 	if unmodifiedObject == nil {
 		// A nil object here means that the object was deleted, so unregister the triggers
-		m.triggers.UnregisterAndTrigger(req)
-	} else {
-		m.triggers.Trigger(req)
+		m.triggers.UnregisterAndTrigger(req.Ctx, req.GVK, req.Key, req.Namespace, req.Name, req.Object)
+	} else if !req.FromTrigger {
+		m.triggers.Trigger(req.Ctx, req.GVK, req.Key, req.Namespace, req.Name, req.Object, !initialList)
 	}
 
 	if handles {

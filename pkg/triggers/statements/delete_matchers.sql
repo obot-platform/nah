@@ -1,0 +1,1 @@
+DELETE FROM handler_name_placeholder_matchers WHERE target_api_version = $1 AND target_kind = $2 AND target_key = $3;

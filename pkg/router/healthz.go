@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os/signal"
 	"sync"
-	"syscall"
 
 	"github.com/obot-platform/nah/pkg/log"
 )
@@ -60,9 +58,6 @@ func startHealthz(ctx context.Context) {
 	}
 	healthz.started = true
 
-	// Catch these signals to ensure a graceful shutdown of the server.
-	sigCtx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, req *http.Request) {
 		if GetHealthy() {
@@ -76,14 +71,11 @@ func startHealthz(ctx context.Context) {
 		Addr:    fmt.Sprintf(":%d", healthz.port),
 		Handler: mux,
 	}
-	go func() {
-		<-sigCtx.Done()
-		// Must cancel so that the registered signals are no longer caught.
-		cancel()
-		if err := srv.Shutdown(ctx); err != nil {
+	context.AfterFunc(ctx, func() {
+		if err := srv.Shutdown(context.Background()); err != nil {
 			log.Warnf("error shutting down healthz server: %v", err)
 		}
-	}()
+	})
 	go func() {
 		log.Infof("healthz server stopped: %v", srv.ListenAndServe())
 	}()

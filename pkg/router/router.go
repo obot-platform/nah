@@ -36,7 +36,6 @@ func New(handlerSet *HandlerSet, electionConfig *leader.ElectionConfig, healthzP
 	r := &Router{
 		handlers:       handlerSet,
 		electionConfig: electionConfig,
-		signalStopped:  make(chan struct{}),
 	}
 
 	if healthzPort > 0 {
@@ -48,6 +47,15 @@ func New(handlerSet *HandlerSet, electionConfig *leader.ElectionConfig, healthzP
 }
 
 func (r *Router) Stopped() <-chan struct{} {
+	// Hold the start lock to ensure we aren't starting and stopping at the same time.
+	r.startLock.Lock()
+	defer r.startLock.Unlock()
+
+	if r.signalStopped == nil {
+		c := make(chan struct{})
+		close(c)
+		return c
+	}
 	return r.signalStopped
 }
 
@@ -211,13 +219,28 @@ func (r *Router) Start(ctx context.Context) error {
 			// Failed to preload caches, panic
 			log.Fatalf("failed to preload caches: %v", err)
 		}
-	}, r.signalStopped)
+	}, r.done)
+}
+
+// done is a callback used by leader election to signal that the controllers are shut down.
+func (r *Router) done() {
+	// Hold the start lock to ensure we aren't starting and stopping at the same time.
+	r.startLock.Lock()
+	defer r.startLock.Unlock()
+
+	if r.signalStopped != nil {
+		close(r.signalStopped)
+	}
 }
 
 // startHandlers gets called when we become the leader or if there is no leader election.
 func (r *Router) startHandlers(ctx context.Context) error {
 	r.startLock.Lock()
 	defer r.startLock.Unlock()
+
+	if r.signalStopped == nil {
+		r.signalStopped = make(chan struct{})
+	}
 
 	var err error
 	// This is the leader now, so not ready until the controller is started and caches are ready.

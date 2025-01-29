@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,17 +49,18 @@ type Controller interface {
 type controller struct {
 	startLock sync.Mutex
 
-	name         string
-	workqueue    workqueue.TypedRateLimitingInterface[any]
-	rateLimiter  workqueue.TypedRateLimiter[any]
-	informer     cache.Informer
-	handler      Handler
-	gvk          schema.GroupVersionKind
-	startKeys    []startKey
-	started      bool
-	registration clientgocache.ResourceEventHandlerRegistration
-	obj          runtime.Object
-	cache        cache.Cache
+	name            string
+	workqueue       workqueue.TypedRateLimitingInterface[any]
+	rateLimiter     workqueue.TypedRateLimiter[any]
+	informer        cache.Informer
+	handler         Handler
+	gvk             schema.GroupVersionKind
+	startKeys       []startKey
+	started         bool
+	registration    clientgocache.ResourceEventHandlerRegistration
+	obj             runtime.Object
+	cache           cache.Cache
+	initialRevision int64
 }
 
 type startKey struct {
@@ -67,7 +69,8 @@ type startKey struct {
 }
 
 type Options struct {
-	RateLimiter workqueue.TypedRateLimiter[any]
+	RateLimiter     workqueue.TypedRateLimiter[any]
+	InitialRevision int64
 }
 
 func New(gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache, handler Handler, opts *Options) (Controller, error) {
@@ -84,13 +87,14 @@ func New(gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache,
 	}
 
 	controller := &controller{
-		gvk:         gvk,
-		name:        gvk.String(),
-		handler:     handler,
-		cache:       cache,
-		obj:         obj,
-		rateLimiter: opts.RateLimiter,
-		informer:    informer,
+		gvk:             gvk,
+		name:            gvk.String(),
+		handler:         handler,
+		cache:           cache,
+		obj:             obj,
+		rateLimiter:     opts.RateLimiter,
+		informer:        informer,
+		initialRevision: opts.InitialRevision,
 	}
 
 	return controller, nil
@@ -189,12 +193,12 @@ func (c *controller) Start(ctx context.Context, workers int) error {
 	}
 
 	if c.registration == nil {
-		registration, err := c.informer.AddEventHandler(clientgocache.ResourceEventHandlerFuncs{
-			AddFunc: c.handleObject,
+		registration, err := c.informer.AddEventHandler(clientgocache.ResourceEventHandlerDetailedFuncs{
+			AddFunc: c.handleAdd,
 			UpdateFunc: func(old, new interface{}) {
-				c.handleObject(new)
+				c.handleNonAdd(new)
 			},
-			DeleteFunc: c.handleObject,
+			DeleteFunc: c.handleNonAdd,
 		})
 		if err != nil {
 			return err
@@ -283,7 +287,7 @@ func (c *controller) syncHandler(ctx context.Context, key string) error {
 		return err
 	}
 
-	return c.handler.OnChange(key, obj.(runtime.Object))
+	return c.handler.OnChange(key, obj)
 }
 
 func (c *controller) EnqueueKey(key string) {
@@ -340,23 +344,25 @@ func keyFunc(namespace, name string) string {
 	return namespace + "/" + name
 }
 
-func (c *controller) enqueue(obj interface{}) {
-	var key string
-	var err error
-	if key, err = clientgocache.MetaNamespaceKeyFunc(obj); err != nil {
+func (c *controller) enqueue(obj interface{}, prefix string) {
+	key, err := clientgocache.MetaNamespaceKeyFunc(obj)
+	if err != nil {
 		log.Errorf("%v", err)
 		return
 	}
+
+	key = prefix + key
+
 	c.startLock.Lock()
+	defer c.startLock.Unlock()
 	if c.workqueue == nil {
 		c.startKeys = append(c.startKeys, startKey{key: key})
 	} else {
 		c.workqueue.Add(key)
 	}
-	c.startLock.Unlock()
 }
 
-func (c *controller) handleObject(obj interface{}) {
+func (c *controller) handleNonAdd(obj interface{}) {
 	if _, ok := obj.(metav1.Object); !ok {
 		tombstone, ok := obj.(clientgocache.DeletedFinalStateUnknown)
 		if !ok {
@@ -370,5 +376,32 @@ func (c *controller) handleObject(obj interface{}) {
 		}
 		obj = newObj
 	}
-	c.enqueue(obj)
+	c.enqueue(obj, "")
+}
+
+func (c *controller) handleAdd(obj interface{}, isInInitialList bool) {
+	metaObj, ok := obj.(kclient.Object)
+	if !ok {
+		tombstone, ok := obj.(clientgocache.DeletedFinalStateUnknown)
+		if !ok {
+			log.Errorf("error decoding object, invalid type")
+			return
+		}
+		metaObj, ok = tombstone.Obj.(kclient.Object)
+		if !ok {
+			log.Errorf("error decoding object tombstone, invalid type")
+			return
+		}
+		obj = metaObj
+	}
+
+	var prefix string
+	if isInInitialList {
+		if rev, err := strconv.ParseInt(metaObj.GetResourceVersion(), 10, 64); err == nil && rev <= c.initialRevision {
+			return
+		}
+		prefix = "_i "
+	}
+
+	c.enqueue(obj, prefix)
 }
