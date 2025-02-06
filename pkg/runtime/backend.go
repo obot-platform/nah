@@ -24,7 +24,7 @@ import (
 var DefaultThreadiness = 5
 
 func init() {
-	i, _ := strconv.Atoi(os.Getenv("BAAAH_THREADINESS"))
+	i, _ := strconv.Atoi(os.Getenv("NAH_THREADINESS"))
 	if i > 0 {
 		DefaultThreadiness = i
 	}
@@ -67,7 +67,7 @@ func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
 	if preloadOnly {
 		err = b.cacheFactory.Preload(ctx)
 	} else {
-		err = b.cacheFactory.Start(ctx, DefaultThreadiness)
+		err = b.cacheFactory.Start(ctx)
 	}
 	if err != nil {
 		return err

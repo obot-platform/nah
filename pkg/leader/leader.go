@@ -30,7 +30,7 @@ type ElectionConfig struct {
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
 	ttl := defaultLeaderTTL
-	if os.Getenv("BAAAH_DEV_MODE") != "" {
+	if os.Getenv("NAH_DEV_MODE") != "" {
 		ttl = devLeaderTTL
 	}
 	return &ElectionConfig{

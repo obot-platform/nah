@@ -1,4 +1,4 @@
-package baaah
+package nah
 
 import (
 	"fmt"
@@ -7,8 +7,9 @@ import (
 	"github.com/obot-platform/nah/pkg/leader"
 	"github.com/obot-platform/nah/pkg/restconfig"
 	"github.com/obot-platform/nah/pkg/router"
-	bruntime "github.com/obot-platform/nah/pkg/runtime"
+	nruntime "github.com/obot-platform/nah/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 )
 
@@ -25,11 +26,13 @@ type Options struct {
 	Scheme *runtime.Scheme
 	// APIGroupConfigs are keyed by an API group. This indicates to the router that all actions on this group should use the
 	// given Config. This is useful for routers that watch different objects on different API servers.
-	APIGroupConfigs map[string]bruntime.Config
+	APIGroupConfigs map[string]nruntime.GroupConfig
 	// ElectionConfig being nil represents no leader election for the router.
 	ElectionConfig *leader.ElectionConfig
 	// Defaults to 8888
 	HealthzPort int
+	// Change the threadedness per GVK
+	GVKThreadiness map[schema.GroupVersionKind]int
 }
 
 func (o *Options) complete() (*Options, error) {
@@ -58,8 +61,8 @@ func (o *Options) complete() (*Options, error) {
 		}
 	}
 
-	defaultConfig := bruntime.Config{Rest: result.DefaultRESTConfig, Namespace: result.DefaultNamespace}
-	backend, err := bruntime.NewRuntimeWithConfigs(defaultConfig, result.APIGroupConfigs, result.Scheme)
+	defaultConfig := nruntime.Config{GroupConfig: nruntime.GroupConfig{Rest: result.DefaultRESTConfig, Namespace: result.DefaultNamespace}, GVKThreadiness: result.GVKThreadiness}
+	backend, err := nruntime.NewRuntimeWithConfigs(defaultConfig, result.APIGroupConfigs, result.Scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +78,7 @@ func DefaultOptions(routerName string, scheme *runtime.Scheme) (*Options, error)
 	if err != nil {
 		return nil, err
 	}
-	rt, err := bruntime.NewRuntimeForNamespace(cfg, "", scheme)
+	rt, err := nruntime.NewRuntimeForNamespace(cfg, "", scheme)
 	if err != nil {
 		return nil, err
 	}

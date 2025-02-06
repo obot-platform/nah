@@ -17,13 +17,13 @@ var (
 		//log.Printf("INFO: "+message+"\n", obj...)
 	}
 	Warnf = func(message string, obj ...interface{}) {
-		log.Printf("WARN [BAAAH]: "+message+"\n", obj...)
+		log.Printf("WARN [NAH]: "+message+"\n", obj...)
 	}
 	Errorf = func(message string, obj ...interface{}) {
-		log.Printf("ERROR[BAAAH]: "+message+"\n", obj...)
+		log.Printf("ERROR[NAH]: "+message+"\n", obj...)
 	}
 	Fatalf = func(message string, obj ...interface{}) {
-		log.Fatalf("FATAL[BAAAH]: "+message+"\n", obj...)
+		log.Fatalf("FATAL[NAH]: "+message+"\n", obj...)
 	}
 	Debugf = func(message string, obj ...interface{}) {
 		//log.Printf("DEBUG: "+message+"\n", obj...)
