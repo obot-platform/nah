@@ -6,6 +6,7 @@ import (
 	"github.com/obot-platform/nah/pkg/mapper"
 	"github.com/obot-platform/nah/pkg/runtime/multi"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -17,23 +18,32 @@ type Runtime struct {
 }
 
 type Config struct {
+	GroupConfig
+	GVKThreadiness map[schema.GroupVersionKind]int
+}
+
+type GroupConfig struct {
 	Rest      *rest.Config
 	Namespace string
 }
 
 func NewRuntime(cfg *rest.Config, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfig(Config{Rest: cfg}, scheme)
+	return NewRuntimeWithConfig(Config{
+		GroupConfig: GroupConfig{
+			Rest: cfg,
+		},
+	}, scheme)
 }
 
 func NewRuntimeForNamespace(cfg *rest.Config, namespace string, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfigs(Config{Rest: cfg, Namespace: namespace}, nil, scheme)
+	return NewRuntimeWithConfigs(Config{GroupConfig: GroupConfig{Rest: cfg, Namespace: namespace}}, nil, scheme)
 }
 
 func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) {
 	return NewRuntimeWithConfigs(cfg, nil, scheme)
 }
 
-func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Config, scheme *runtime.Scheme) (*Runtime, error) {
+func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]GroupConfig, scheme *runtime.Scheme) (*Runtime, error) {
 	clients := make(map[string]client.WithWatch, len(apiGroupConfigs))
 	cachedClients := make(map[string]client.Client, len(apiGroupConfigs))
 	caches := make(map[string]cache.Cache, len(apiGroupConfigs))
@@ -49,7 +59,7 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Conf
 		cachedClients[key] = cachedClient
 	}
 
-	uncachedClient, cachedClient, theCache, err := getClients(defaultConfig, scheme)
+	uncachedClient, cachedClient, theCache, err := getClients(defaultConfig.GroupConfig, scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +69,8 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Conf
 	aggCache := multi.NewCache(scheme, theCache, caches)
 
 	factory := NewSharedControllerFactory(aggUncachedClient, aggCache, &SharedControllerFactoryOptions{
-		// In baaah this is only invoked when a key fails to process
+		KindWorkers: defaultConfig.GVKThreadiness,
+		// In nah this is only invoked when a key fails to process
 		DefaultRateLimiter: workqueue.NewTypedMaxOfRateLimiter(
 			// This will go .5, 1, 2, 4, 8 seconds, etc up until 15 minutes
 			workqueue.NewTypedItemExponentialFailureRateLimiter[any](500*time.Millisecond, 15*time.Minute),
@@ -71,7 +82,7 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Conf
 	}, nil
 }
 
-func getClients(cfg Config, scheme *runtime.Scheme) (uncachedClient client.WithWatch, cachedClient client.Client, theCache cache.Cache, err error) {
+func getClients(cfg GroupConfig, scheme *runtime.Scheme) (uncachedClient client.WithWatch, cachedClient client.Client, theCache cache.Cache, err error) {
 	mapper, err := mapper.New(cfg.Rest)
 	if err != nil {
 		return nil, nil, nil, err

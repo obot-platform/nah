@@ -13,7 +13,7 @@ import (
 type SharedControllerFactory interface {
 	ForKind(gvk schema.GroupVersionKind) (SharedController, error)
 	Preload(ctx context.Context) error
-	Start(ctx context.Context, workers int) error
+	Start(ctx context.Context) error
 }
 
 type SharedControllerFactoryOptions struct {
@@ -58,19 +58,19 @@ func applyDefaultSharedOptions(opts *SharedControllerFactoryOptions) *SharedCont
 		newOpts = *opts
 	}
 	if newOpts.DefaultWorkers == 0 {
-		newOpts.DefaultWorkers = 5
+		newOpts.DefaultWorkers = DefaultThreadiness
 	}
 	return &newOpts
 }
 func (s *sharedControllerFactory) Preload(ctx context.Context) error {
-	return s.start(ctx, 0)
+	return s.loadAndStart(ctx, false)
 }
 
-func (s *sharedControllerFactory) Start(ctx context.Context, defaultWorkers int) error {
-	return s.start(ctx, defaultWorkers)
+func (s *sharedControllerFactory) Start(ctx context.Context) error {
+	return s.loadAndStart(ctx, true)
 }
 
-func (s *sharedControllerFactory) start(ctx context.Context, defaultWorkers int) error {
+func (s *sharedControllerFactory) loadAndStart(ctx context.Context, start bool) error {
 	s.controllerLock.Lock()
 	defer s.controllerLock.Unlock()
 
@@ -99,9 +99,9 @@ func (s *sharedControllerFactory) start(ctx context.Context, defaultWorkers int)
 	s.cache.WaitForCacheSync(ctx)
 	s.controllerLock.Lock()
 
-	if defaultWorkers != 0 {
+	if start {
 		for gvk, controller := range controllersCopy {
-			w, err := s.getWorkers(gvk, defaultWorkers)
+			w, err := s.getWorkers(gvk)
 			if err != nil {
 				return err
 			}
@@ -150,13 +150,9 @@ func (s *sharedControllerFactory) ForKind(gvk schema.GroupVersionKind) (SharedCo
 	return controllerResult, nil
 }
 
-func (s *sharedControllerFactory) getWorkers(gvk schema.GroupVersionKind, workers int) (int, error) {
-	w, ok := s.kindWorkers[gvk]
-	if ok {
+func (s *sharedControllerFactory) getWorkers(gvk schema.GroupVersionKind) (int, error) {
+	if w, ok := s.kindWorkers[gvk]; ok {
 		return w, nil
-	}
-	if workers > 0 {
-		return workers, nil
 	}
 	return s.workers, nil
 }
