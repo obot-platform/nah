@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/obot-platform/nah/pkg/log"
@@ -52,7 +50,7 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 	}
 }
 
-func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader, onSwitchLeader OnNewLeader, signalDone chan struct{}) error {
+func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
 	if ec == nil {
 		// Don't start leader election if there is no config.
 		return onLeader(ctx)
@@ -69,7 +67,7 @@ func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader,
 	return nil
 }
 
-func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone chan struct{}) error {
+func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
 	rl, err := resourcelock.NewFromKubeconfig(
 		ec.ResourceLockType,
 		ec.Namespace,
@@ -83,15 +81,6 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 	if err != nil {
 		return fmt.Errorf("error creating leader lock for %s: %v", ec.Name, err)
 	}
-
-	// Catch these signals to ensure a graceful shutdown and leader election release.
-	sigCtx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL)
-	defer func() {
-		if err != nil {
-			// If we encountered an error, cancel the context because we won't be using it.
-			cancel()
-		}
-	}()
 
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
 		Lock:          rl,
@@ -107,23 +96,12 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 			OnNewLeader: onSwitchLeader,
 			OnStoppedLeading: func() {
 				select {
-				case <-sigCtx.Done():
-					// Must cancel so that the registered signals are no longer caught.
-					cancel()
-
+				case <-ctx.Done():
 					// The context has been canceled or is otherwise complete.
-					// This is a request to terminate. Exit 0.
-					// Exiting cleanly is useful when the context is canceled
-					// so that Kubernetes doesn't record it exiting in error
-					// when the exit was requested. For example, the wrangler-cli
-					// package sets up a context that cancels when SIGTERM is
-					// sent in. If a node is shut down this is the type of signal
-					// sent. In that case you want the 0 exit code to mark it as
-					// complete so that everything comes back up correctly after
-					// a restart.
-					// The pattern found here can be found inside the kube-scheduler.
 					log.Infof("requested to terminate, exiting")
-					close(signalDone)
+					if signalDone != nil {
+						signalDone()
+					}
 				default:
 					log.Fatalf("leader election lost for %s", ec.Name)
 				}
@@ -136,7 +114,7 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 	}
 
 	go func() {
-		le.Run(sigCtx)
+		le.Run(ctx)
 	}()
 	return nil
 }

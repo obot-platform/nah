@@ -1,0 +1,1 @@
+DELETE FROM handler_name_placeholder_matchers WHERE namespace = $1 AND name = $2;

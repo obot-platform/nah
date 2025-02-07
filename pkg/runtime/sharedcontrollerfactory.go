@@ -22,6 +22,8 @@ type SharedControllerFactoryOptions struct {
 
 	KindRateLimiter map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
 	KindWorkers     map[schema.GroupVersionKind]int
+
+	InitialRevisionsState map[schema.GroupVersionKind]int64
 }
 
 type sharedControllerFactory struct {
@@ -33,22 +35,24 @@ type sharedControllerFactory struct {
 	client       kclient.Client
 	controllers  map[schema.GroupVersionKind]*sharedController
 
-	rateLimiter     workqueue.TypedRateLimiter[any]
-	workers         int
-	kindRateLimiter map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
-	kindWorkers     map[schema.GroupVersionKind]int
+	rateLimiter           workqueue.TypedRateLimiter[any]
+	workers               int
+	kindRateLimiter       map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
+	kindWorkers           map[schema.GroupVersionKind]int
+	initialRevisionsState map[schema.GroupVersionKind]int64
 }
 
 func NewSharedControllerFactory(c kclient.Client, cache cache.Cache, opts *SharedControllerFactoryOptions) SharedControllerFactory {
 	opts = applyDefaultSharedOptions(opts)
 	return &sharedControllerFactory{
-		cache:           cache,
-		client:          c,
-		controllers:     map[schema.GroupVersionKind]*sharedController{},
-		workers:         opts.DefaultWorkers,
-		kindWorkers:     opts.KindWorkers,
-		rateLimiter:     opts.DefaultRateLimiter,
-		kindRateLimiter: opts.KindRateLimiter,
+		cache:                 cache,
+		client:                c,
+		controllers:           map[schema.GroupVersionKind]*sharedController{},
+		workers:               opts.DefaultWorkers,
+		kindWorkers:           opts.KindWorkers,
+		rateLimiter:           opts.DefaultRateLimiter,
+		kindRateLimiter:       opts.KindRateLimiter,
+		initialRevisionsState: opts.InitialRevisionsState,
 	}
 }
 
@@ -138,7 +142,8 @@ func (s *sharedControllerFactory) ForKind(gvk schema.GroupVersionKind) (SharedCo
 			}
 
 			return New(gvk, s.client.Scheme(), s.cache, handler, &Options{
-				RateLimiter: rateLimiter,
+				RateLimiter:     rateLimiter,
+				InitialRevision: s.initialRevisionsState[gvk],
 			})
 		},
 		handler: handler,

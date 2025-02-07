@@ -1,4 +1,4 @@
-package router
+package triggers
 
 import (
 	"k8s.io/apimachinery/pkg/fields"
@@ -13,7 +13,7 @@ type objectMatcher struct {
 	Fields    fields.Selector
 }
 
-func (o *objectMatcher) String() string {
+func (o *objectMatcher) string() string {
 	s := o.Name + "/" + o.Namespace
 	if o.Selector != nil {
 		s += "/label selectors" + o.Selector.String()
@@ -24,29 +24,7 @@ func (o *objectMatcher) String() string {
 	return s
 }
 
-func (o *objectMatcher) Equals(other objectMatcher) bool {
-	if o.Name != other.Name {
-		return false
-	}
-	if o.Namespace != other.Namespace {
-		return false
-	}
-	if (o.Selector == nil) != (other.Selector == nil) {
-		return false
-	}
-	if o.Selector != nil && o.Selector.String() != other.Selector.String() {
-		return false
-	}
-	if (o.Fields == nil) != (other.Fields == nil) {
-		return false
-	}
-	if o.Fields != nil && o.Fields.String() != other.Fields.String() {
-		return false
-	}
-	return true
-}
-
-func (o *objectMatcher) Match(ns, name string, obj kclient.Object) bool {
+func (o *objectMatcher) match(ns, name string, obj kclient.Object) bool {
 	if o.Name != "" {
 		return o.Name == name &&
 			o.Namespace == ns

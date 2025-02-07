@@ -1,10 +1,14 @@
 package runtime
 
 import (
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/obot-platform/nah/pkg/mapper"
 	"github.com/obot-platform/nah/pkg/runtime/multi"
+	"github.com/obot-platform/nah/pkg/triggers"
+	"github.com/obot-platform/nah/pkg/triggers/statements"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
@@ -24,26 +28,48 @@ type Config struct {
 
 type GroupConfig struct {
 	Rest      *rest.Config
+	DB        *sql.DB
 	Namespace string
 }
 
-func NewRuntime(cfg *rest.Config, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfig(Config{
-		GroupConfig: GroupConfig{
-			Rest: cfg,
-		},
-	}, scheme)
+func NewRuntime(handlerName string, cfg *rest.Config, scheme *runtime.Scheme) (*Runtime, error) {
+	return NewRuntimeWithConfig(handlerName, Config{GroupConfig: GroupConfig{Rest: cfg}}, scheme)
 }
 
-func NewRuntimeForNamespace(cfg *rest.Config, namespace string, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfigs(Config{GroupConfig: GroupConfig{Rest: cfg, Namespace: namespace}}, nil, scheme)
+func NewRuntimeForNamespace(handlerName string, cfg *rest.Config, namespace string, scheme *runtime.Scheme) (*Runtime, error) {
+	return NewRuntimeWithConfigs(handlerName, Config{GroupConfig: GroupConfig{Rest: cfg, Namespace: namespace}}, nil, scheme)
 }
 
-func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfigs(cfg, nil, scheme)
+func NewRuntimeWithConfig(handlerName string, cfg Config, scheme *runtime.Scheme) (*Runtime, error) {
+	return NewRuntimeWithConfigs(handlerName, cfg, nil, scheme)
 }
 
-func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]GroupConfig, scheme *runtime.Scheme) (*Runtime, error) {
+func NewRuntimeWithConfigs(handlerName string, defaultConfig Config, apiGroupConfigs map[string]GroupConfig, scheme *runtime.Scheme) (*Runtime, error) {
+	var (
+		initialRevisions = map[schema.GroupVersionKind]int64{}
+		groupsToGVKs     = map[string][]schema.GroupVersionKind{}
+		stmts            = statements.New(handlerName)
+	)
+	if defaultConfig.DB != nil {
+		for gvk := range scheme.AllKnownTypes() {
+			obj, err := scheme.New(gvk)
+			if err != nil {
+				return nil, err
+			}
+
+			clientObj, ok := obj.(client.Object)
+			if !ok {
+				continue
+			}
+
+			groupsToGVKs[gvk.Group] = append(groupsToGVKs[gvk.Group], gvk)
+			initialRevisions[gvk], err = getInitialRevision(defaultConfig.DB, stmts, gvk, clientObj)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	clients := make(map[string]client.WithWatch, len(apiGroupConfigs))
 	cachedClients := make(map[string]client.Client, len(apiGroupConfigs))
 	caches := make(map[string]cache.Cache, len(apiGroupConfigs))
@@ -57,6 +83,27 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Grou
 		clients[key] = uncachedClient
 		caches[key] = theCache
 		cachedClients[key] = cachedClient
+
+		if cfg.DB != nil {
+			for _, gvks := range groupsToGVKs {
+				for _, gvk := range gvks {
+					obj, err := scheme.New(gvk)
+					if err != nil {
+						return nil, err
+					}
+
+					clientObj, ok := obj.(client.Object)
+					if !ok {
+						continue
+					}
+
+					initialRevisions[gvk], err = getInitialRevision(cfg.DB, stmts, gvk, clientObj)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 	}
 
 	uncachedClient, cachedClient, theCache, err := getClients(defaultConfig.GroupConfig, scheme)
@@ -75,6 +122,7 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Grou
 			// This will go .5, 1, 2, 4, 8 seconds, etc up until 15 minutes
 			workqueue.NewTypedItemExponentialFailureRateLimiter[any](500*time.Millisecond, 15*time.Minute),
 		),
+		InitialRevisionsState: initialRevisions,
 	})
 
 	return &Runtime{
@@ -123,4 +171,23 @@ func getClients(cfg GroupConfig, scheme *runtime.Scheme) (uncachedClient client.
 	}
 
 	return uncachedClient, cachedClient, theCache, nil
+}
+
+func getInitialRevision(db *sql.DB, stmts *statements.Statements, gvk schema.GroupVersionKind, obj client.Object) (int64, error) {
+	var revision int64
+	_, err := db.Exec(stmts.CreateRevisionsTable())
+	if err != nil {
+		return 0, err
+	}
+
+	var generation int64
+	if o, ok := obj.(triggers.Generationed); ok {
+		generation = o.TriggerGeneration()
+	}
+
+	if err = db.QueryRow(stmts.GetLatestRevision(), gvk.Kind, generation).Scan(&revision); !errors.Is(err, sql.ErrNoRows) {
+		return revision, err
+	}
+
+	return revision, nil
 }

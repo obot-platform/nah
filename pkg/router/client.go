@@ -14,7 +14,7 @@ import (
 )
 
 type TriggerRegistry interface {
-	Watch(obj runtime.Object, namespace, name string, selector labels.Selector, fields fields.Selector) error
+	Watch(ctx context.Context, obj runtime.Object, namespace, name string, selector labels.Selector, fields fields.Selector) error
 	WatchingGVKs() []schema.GroupVersionKind
 }
 
@@ -47,28 +47,28 @@ func (w *writer) DeleteAllOf(ctx context.Context, obj kclient.Object, opts ...kc
 	for _, opt := range opts {
 		opt.ApplyToDeleteAllOf(delOpts)
 	}
-	if err := w.registry.Watch(obj, delOpts.Namespace, "", delOpts.LabelSelector, delOpts.FieldSelector); err != nil {
+	if err := w.registry.Watch(ctx, obj, delOpts.Namespace, "", delOpts.LabelSelector, delOpts.FieldSelector); err != nil {
 		return err
 	}
 	return w.client.DeleteAllOf(ctx, obj, opts...)
 }
 
 func (w *writer) Delete(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteOption) error {
-	if err := w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := w.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 	return w.client.Delete(ctx, obj, opts...)
 }
 
 func (w *writer) Patch(ctx context.Context, obj kclient.Object, patch kclient.Patch, opts ...kclient.PatchOption) error {
-	if err := w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := w.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 	return w.client.Patch(ctx, obj, patch, opts...)
 }
 
 func (w *writer) Update(ctx context.Context, obj kclient.Object, opts ...kclient.UpdateOption) error {
-	if err := w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := w.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 	return w.client.Update(ctx, obj, opts...)
@@ -78,11 +78,11 @@ func (w *writer) Create(ctx context.Context, obj kclient.Object, opts ...kclient
 	if obj.GetName() == "" {
 		defer func() {
 			if err != nil {
-				err = w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil)
+				err = w.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil)
 			}
 		}()
 	} else {
-		if err = w.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+		if err = w.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 			return err
 		}
 	}
@@ -108,7 +108,7 @@ func (s *status) Status() kclient.StatusWriter {
 }
 
 func (s *subResourceClient) Get(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceGetOption) error {
-	if err := s.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := s.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 
@@ -116,21 +116,21 @@ func (s *subResourceClient) Get(ctx context.Context, obj kclient.Object, subReso
 }
 
 func (s *subResourceClient) Update(ctx context.Context, obj kclient.Object, opts ...kclient.SubResourceUpdateOption) error {
-	if err := s.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := s.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 	return s.writer.Update(ctx, obj, opts...)
 }
 
 func (s *subResourceClient) Patch(ctx context.Context, obj kclient.Object, patch kclient.Patch, opts ...kclient.SubResourcePatchOption) error {
-	if err := s.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := s.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 	return s.writer.Patch(ctx, obj, patch, opts...)
 }
 
 func (s *subResourceClient) Create(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceCreateOption) error {
-	if err := s.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
+	if err := s.registry.Watch(ctx, obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
 	}
 	return s.writer.Create(ctx, obj, subResource, opts...)
@@ -160,7 +160,7 @@ func (a *reader) SubResource(subResource string) kclient.SubResourceClient {
 }
 
 func (a *reader) Get(ctx context.Context, key kclient.ObjectKey, obj kclient.Object, opts ...kclient.GetOption) error {
-	if err := a.registry.Watch(obj, key.Namespace, key.Name, nil, nil); err != nil {
+	if err := a.registry.Watch(ctx, obj, key.Namespace, key.Name, nil, nil); err != nil {
 		return err
 	}
 
@@ -173,7 +173,7 @@ func (a *reader) List(ctx context.Context, list kclient.ObjectList, opts ...kcli
 		opt.ApplyToList(listOpt)
 	}
 
-	if err := a.registry.Watch(list, listOpt.Namespace, "", listOpt.LabelSelector, listOpt.FieldSelector); err != nil {
+	if err := a.registry.Watch(ctx, list, listOpt.Namespace, "", listOpt.LabelSelector, listOpt.FieldSelector); err != nil {
 		return err
 	}
 

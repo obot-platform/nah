@@ -1,13 +1,20 @@
 package nah
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/leader"
+	"github.com/obot-platform/nah/pkg/logrus"
 	"github.com/obot-platform/nah/pkg/restconfig"
 	"github.com/obot-platform/nah/pkg/router"
 	nruntime "github.com/obot-platform/nah/pkg/runtime"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
@@ -31,12 +38,19 @@ type Options struct {
 	ElectionConfig *leader.ElectionConfig
 	// Defaults to 8888
 	HealthzPort int
+	// DSN to use for persistent store
+	DSN string
 	// Change the threadedness per GVK
 	GVKThreadiness map[schema.GroupVersionKind]int
+
+	db *sql.DB
 }
 
-func (o *Options) complete() (*Options, error) {
-	var result Options
+func (o *Options) complete(handlerName string) (*Options, error) {
+	var (
+		result Options
+		err    error
+	)
 	if o != nil {
 		result = *o
 	}
@@ -54,21 +68,80 @@ func (o *Options) complete() (*Options, error) {
 	}
 
 	if result.DefaultRESTConfig == nil {
-		var err error
 		result.DefaultRESTConfig, err = restconfig.New(result.Scheme)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	defaultConfig := nruntime.Config{GroupConfig: nruntime.GroupConfig{Rest: result.DefaultRESTConfig, Namespace: result.DefaultNamespace}, GVKThreadiness: result.GVKThreadiness}
-	backend, err := nruntime.NewRuntimeWithConfigs(defaultConfig, result.APIGroupConfigs, result.Scheme)
+	if result.DSN != "" {
+		result.db, err = newDB(result.DSN)
+		if err != nil {
+			return nil, fmt.Errorf("error creating database connection: %v", err)
+		}
+	}
+
+	defaultConfig := nruntime.Config{
+		GroupConfig: nruntime.GroupConfig{
+			Rest:      result.DefaultRESTConfig,
+			Namespace: result.DefaultNamespace,
+			DB:        result.db,
+		},
+	}
+	backend, err := nruntime.NewRuntimeWithConfigs(handlerName, defaultConfig, result.APIGroupConfigs, result.Scheme)
 	if err != nil {
 		return nil, err
 	}
 	result.Backend = backend.Backend
 
 	return &result, nil
+}
+
+func newDB(dsn string) (*sql.DB, error) {
+	var (
+		gdb                    gorm.Dialector
+		pool                   bool
+		skipDefaultTransaction bool
+	)
+	switch {
+	case strings.HasPrefix(dsn, "sqlite://"):
+		skipDefaultTransaction = true
+		gdb = sqlite.Open(strings.TrimPrefix(dsn, "sqlite://"))
+	case strings.HasPrefix(dsn, "postgresql://"):
+		dsn = strings.Replace(dsn, "postgresql://", "postgres://", 1)
+		fallthrough
+	case strings.HasPrefix(dsn, "postgres://"):
+		gdb = postgres.Open(dsn)
+		pool = true
+	default:
+		return nil, fmt.Errorf("unsupported database: %s", dsn)
+	}
+	db, err := gorm.Open(gdb, &gorm.Config{
+		SkipDefaultTransaction: skipDefaultTransaction,
+		Logger: logrus.New(logrus.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			IgnoreRecordNotFoundError: true,
+			LogSQL:                    true,
+		}),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetConnMaxLifetime(time.Minute * 3)
+	if pool {
+		sqlDB.SetMaxIdleConns(5)
+		sqlDB.SetMaxOpenConns(5)
+	} else {
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetMaxOpenConns(1)
+	}
+
+	return sqlDB, nil
 }
 
 // DefaultOptions represent the standard options for a Router.
@@ -78,7 +151,7 @@ func DefaultOptions(routerName string, scheme *runtime.Scheme) (*Options, error)
 	if err != nil {
 		return nil, err
 	}
-	rt, err := nruntime.NewRuntimeForNamespace(cfg, "", scheme)
+	rt, err := nruntime.NewRuntimeForNamespace(routerName, cfg, "", scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +166,7 @@ func DefaultOptions(routerName string, scheme *runtime.Scheme) (*Options, error)
 }
 
 // DefaultRouter The routerName is important as this name will be used to assign ownership of objects created by this
-// router. Specifically the routerName is assigned to the sub-context in the apply actions. Additionally, the routerName
+// router. Specifically, the routerName is assigned to the sub-context in the apply actions. Additionally, the routerName
 // will be used for the leader election lease lock.
 func DefaultRouter(routerName string, scheme *runtime.Scheme) (*router.Router, error) {
 	opts, err := DefaultOptions(routerName, scheme)
@@ -104,9 +177,13 @@ func DefaultRouter(routerName string, scheme *runtime.Scheme) (*router.Router, e
 }
 
 func NewRouter(handlerName string, opts *Options) (*router.Router, error) {
-	opts, err := opts.complete()
+	opts, err := opts.complete(handlerName)
 	if err != nil {
 		return nil, err
 	}
-	return router.New(router.NewHandlerSet(handlerName, opts.Backend.Scheme(), opts.Backend), opts.ElectionConfig, opts.HealthzPort), nil
+	hs, err := router.NewHandlerSet(handlerName, opts.Backend.Scheme(), opts.Backend, opts.db)
+	if err != nil {
+		return nil, err
+	}
+	return router.New(hs, opts.ElectionConfig, opts.HealthzPort), nil
 }
