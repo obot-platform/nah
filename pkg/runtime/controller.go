@@ -48,7 +48,7 @@ type controller struct {
 	startLock sync.Mutex
 
 	name         string
-	workqueue    workqueue.TypedRateLimitingInterface[any]
+	workqueues   []workqueue.TypedRateLimitingInterface[any]
 	rateLimiter  workqueue.TypedRateLimiter[any]
 	informer     cache.Informer
 	handler      Handler
@@ -58,6 +58,7 @@ type controller struct {
 	registration clientgocache.ResourceEventHandlerRegistration
 	obj          runtime.Object
 	cache        cache.Cache
+	splitter     WorkerQueueSplitter
 }
 
 type startKey struct {
@@ -66,10 +67,26 @@ type startKey struct {
 }
 
 type Options struct {
-	RateLimiter workqueue.TypedRateLimiter[any]
+	RateLimiter   workqueue.TypedRateLimiter[any]
+	QueueSplitter WorkerQueueSplitter
 }
 
-func New(gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache, handler Handler, opts *Options) (Controller, error) {
+type WorkerQueueSplitter interface {
+	Queues() int
+	Split(key string) int
+}
+
+type singleWorkerQueueSplitter struct{}
+
+func (*singleWorkerQueueSplitter) Queues() int {
+	return 1
+}
+
+func (*singleWorkerQueueSplitter) Split(string) int {
+	return 0
+}
+
+func New(ctx context.Context, gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache, handler Handler, opts *Options) (Controller, error) {
 	opts = applyDefaultOptions(opts)
 
 	obj, err := newObject(scheme, gvk)
@@ -77,7 +94,7 @@ func New(gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache,
 		return nil, err
 	}
 
-	informer, err := cache.GetInformerForKind(context.TODO(), gvk)
+	informer, err := cache.GetInformerForKind(ctx, gvk)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +107,7 @@ func New(gvk schema.GroupVersionKind, scheme *runtime.Scheme, cache cache.Cache,
 		obj:         obj,
 		rateLimiter: opts.RateLimiter,
 		informer:    informer,
+		splitter:    opts.QueueSplitter,
 	}
 
 	return controller, nil
@@ -114,6 +132,9 @@ func applyDefaultOptions(opts *Options) *Options {
 			workqueue.NewTypedItemExponentialFailureRateLimiter[any](5*time.Millisecond, 30*time.Second),
 		)
 	}
+	if newOpts.QueueSplitter == nil {
+		newOpts.QueueSplitter = (*singleWorkerQueueSplitter)(nil)
+	}
 	return &newOpts
 }
 
@@ -135,12 +156,15 @@ func (c *controller) run(ctx context.Context, workers int) {
 	// will create a goroutine under the hood.  It we instantiate a workqueue we must have
 	// a mechanism to Shutdown it down.  Without the stopCh we don't know when to shutdown
 	// the queue and release the goroutine
-	c.workqueue = workqueue.NewTypedRateLimitingQueueWithConfig(c.rateLimiter, workqueue.TypedRateLimitingQueueConfig[any]{Name: c.name})
+	c.workqueues = make([]workqueue.TypedRateLimitingInterface[any], c.splitter.Queues())
+	for i := range c.workqueues {
+		c.workqueues[i] = workqueue.NewTypedRateLimitingQueueWithConfig(c.rateLimiter, workqueue.TypedRateLimitingQueueConfig[any]{Name: fmt.Sprintf("%s-%d", c.name, i)})
+	}
 	for _, start := range c.startKeys {
 		if start.after == 0 {
-			c.workqueue.Add(start.key)
+			c.workqueues[c.splitter.Split(start.key)].Add(start.key)
 		} else {
-			c.workqueue.AddAfter(start.key, start.after)
+			c.workqueues[c.splitter.Split(start.key)].AddAfter(start.key, start.after)
 		}
 	}
 	c.startKeys = nil
@@ -210,63 +234,75 @@ func (c *controller) Start(ctx context.Context, workers int) error {
 
 func (c *controller) runWorkers(ctx context.Context, workers int) {
 	wait := sync.WaitGroup{}
-	running := make(chan struct{}, workers)
+	workers = workers / len(c.workqueues)
+	if workers == 0 {
+		workers = 1
+	}
 
 	defer func() {
 		defer wait.Wait()
 	}()
 
-	defer close(running)
-
-	go func() {
-		<-ctx.Done()
-		c.workqueue.ShutDown()
-	}()
-
-	for {
-		obj, shutdown := c.workqueue.Get()
-
-		if shutdown {
-			return
-		}
-
-		running <- struct{}{}
-		wait.Add(1)
-
+	for _, queue := range c.workqueues {
 		go func() {
-			defer func() {
-				<-running
-				wait.Done()
-			}()
+			// This channel acts as a semaphore to limit the number of concurrent
+			// work items handled by this controller.
+			running := make(chan struct{}, workers)
+			defer close(running)
 
-			if err := c.processSingleItem(ctx, obj); err != nil {
-				if !strings.Contains(err.Error(), "please apply your changes to the latest version and try again") {
-					log.Errorf("%v", err)
+			for {
+				obj, shutdown := queue.Get()
+
+				if shutdown {
+					return
 				}
+
+				// Acquire from the semaphore
+				running <- struct{}{}
+				wait.Add(1)
+
+				go func() {
+					defer func() {
+						// Release to the semaphore
+						<-running
+						wait.Done()
+					}()
+
+					if err := c.processSingleItem(ctx, queue, obj); err != nil {
+						if !strings.Contains(err.Error(), "please apply your changes to the latest version and try again") {
+							log.Errorf("%v", err)
+						}
+					}
+				}()
 			}
 		}()
 	}
+
+	<-ctx.Done()
+	for i := range c.workqueues {
+		c.workqueues[i].ShutDown()
+	}
 }
 
-func (c *controller) processSingleItem(ctx context.Context, obj interface{}) error {
+func (c *controller) processSingleItem(ctx context.Context, queue workqueue.TypedRateLimitingInterface[any], obj interface{}) error {
 	var (
 		key string
 		ok  bool
 	)
 
-	defer c.workqueue.Done(obj)
+	defer queue.Done(obj)
 
 	if key, ok = obj.(string); !ok {
-		c.workqueue.Forget(obj)
+		queue.Forget(obj)
 		log.Errorf("expected string in workqueue but got %#v", obj)
 		return nil
 	}
 	if err := c.syncHandler(ctx, key); err != nil {
-		c.workqueue.AddRateLimited(key)
+		queue.AddRateLimited(key)
 		return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
 	}
 
-	c.workqueue.Forget(obj)
+	queue.Forget(obj)
 	return nil
 }
 
@@ -280,7 +316,7 @@ func (c *controller) syncHandler(ctx context.Context, key string) error {
 		return c.handler.OnChange(key, nil)
 	}
 
-	ns, name := keyParse(key)
+	ns, name := KeyParse(key)
 	obj := c.obj.DeepCopyObject().(kclient.Object)
 	err := c.cache.Get(ctx, kclient.ObjectKey{
 		Name:      name,
@@ -299,10 +335,10 @@ func (c *controller) EnqueueKey(key string) {
 	c.startLock.Lock()
 	defer c.startLock.Unlock()
 
-	if c.workqueue == nil {
+	if c.workqueues == nil {
 		c.startKeys = append(c.startKeys, startKey{key: key})
 	} else {
-		c.workqueue.Add(key)
+		c.workqueues[c.splitter.Split(key)].Add(key)
 	}
 }
 
@@ -312,10 +348,10 @@ func (c *controller) Enqueue(namespace, name string) {
 	c.startLock.Lock()
 	defer c.startLock.Unlock()
 
-	if c.workqueue == nil {
+	if c.workqueues == nil {
 		c.startKeys = append(c.startKeys, startKey{key: key})
 	} else {
-		c.workqueue.AddRateLimited(key)
+		c.workqueues[c.splitter.Split(key)].AddRateLimited(key)
 	}
 }
 
@@ -325,15 +361,19 @@ func (c *controller) EnqueueAfter(namespace, name string, duration time.Duration
 	c.startLock.Lock()
 	defer c.startLock.Unlock()
 
-	if c.workqueue == nil {
+	if c.workqueues == nil {
 		c.startKeys = append(c.startKeys, startKey{key: key, after: duration})
 	} else {
-		c.workqueue.AddAfter(key, duration)
+		c.workqueues[c.splitter.Split(key)].AddAfter(key, duration)
 	}
 }
 
-func keyParse(key string) (namespace string, name string) {
-	var ok bool
+func KeyParse(key string) (namespace string, name string) {
+	special, key, ok := strings.Cut(key, " ")
+	if !ok {
+		key = special
+	}
+
 	namespace, name, ok = strings.Cut(key, "/")
 	if !ok {
 		name = namespace
@@ -357,10 +397,10 @@ func (c *controller) enqueue(obj interface{}) {
 		return
 	}
 	c.startLock.Lock()
-	if c.workqueue == nil {
+	if c.workqueues == nil {
 		c.startKeys = append(c.startKeys, startKey{key: key})
 	} else {
-		c.workqueue.Add(key)
+		c.workqueues[c.splitter.Split(key)].Add(key)
 	}
 	c.startLock.Unlock()
 }
