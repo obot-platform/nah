@@ -11,7 +11,7 @@ import (
 )
 
 type SharedControllerFactory interface {
-	ForKind(gvk schema.GroupVersionKind) (SharedController, error)
+	ForKind(ctx context.Context, gvk schema.GroupVersionKind) (SharedController, error)
 	Preload(ctx context.Context) error
 	Start(ctx context.Context) error
 }
@@ -20,8 +20,9 @@ type SharedControllerFactoryOptions struct {
 	DefaultRateLimiter workqueue.TypedRateLimiter[any]
 	DefaultWorkers     int
 
-	KindRateLimiter map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
-	KindWorkers     map[schema.GroupVersionKind]int
+	KindRateLimiter   map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
+	KindWorkers       map[schema.GroupVersionKind]int
+	KindQueueSplitter map[schema.GroupVersionKind]WorkerQueueSplitter
 }
 
 type sharedControllerFactory struct {
@@ -33,22 +34,24 @@ type sharedControllerFactory struct {
 	client       kclient.Client
 	controllers  map[schema.GroupVersionKind]*sharedController
 
-	rateLimiter     workqueue.TypedRateLimiter[any]
-	workers         int
-	kindRateLimiter map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
-	kindWorkers     map[schema.GroupVersionKind]int
+	rateLimiter       workqueue.TypedRateLimiter[any]
+	workers           int
+	kindRateLimiter   map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
+	kindWorkers       map[schema.GroupVersionKind]int
+	kindQueueSplitter map[schema.GroupVersionKind]WorkerQueueSplitter
 }
 
 func NewSharedControllerFactory(c kclient.Client, cache cache.Cache, opts *SharedControllerFactoryOptions) SharedControllerFactory {
 	opts = applyDefaultSharedOptions(opts)
 	return &sharedControllerFactory{
-		cache:           cache,
-		client:          c,
-		controllers:     map[schema.GroupVersionKind]*sharedController{},
-		workers:         opts.DefaultWorkers,
-		kindWorkers:     opts.KindWorkers,
-		rateLimiter:     opts.DefaultRateLimiter,
-		kindRateLimiter: opts.KindRateLimiter,
+		cache:             cache,
+		client:            c,
+		controllers:       map[schema.GroupVersionKind]*sharedController{},
+		workers:           opts.DefaultWorkers,
+		kindWorkers:       opts.KindWorkers,
+		rateLimiter:       opts.DefaultRateLimiter,
+		kindRateLimiter:   opts.KindRateLimiter,
+		kindQueueSplitter: opts.KindQueueSplitter,
 	}
 }
 
@@ -114,7 +117,7 @@ func (s *sharedControllerFactory) loadAndStart(ctx context.Context, start bool) 
 	return nil
 }
 
-func (s *sharedControllerFactory) ForKind(gvk schema.GroupVersionKind) (SharedController, error) {
+func (s *sharedControllerFactory) ForKind(ctx context.Context, gvk schema.GroupVersionKind) (SharedController, error) {
 	controllerResult := s.byGVK(gvk)
 	if controllerResult != nil {
 		return controllerResult, nil
@@ -137,8 +140,9 @@ func (s *sharedControllerFactory) ForKind(gvk schema.GroupVersionKind) (SharedCo
 				rateLimiter = s.rateLimiter
 			}
 
-			return New(gvk, s.client.Scheme(), s.cache, handler, &Options{
-				RateLimiter: rateLimiter,
+			return New(ctx, gvk, s.client.Scheme(), s.cache, handler, &Options{
+				RateLimiter:   rateLimiter,
+				QueueSplitter: s.kindQueueSplitter[gvk],
 			})
 		},
 		handler: handler,

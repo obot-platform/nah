@@ -33,6 +33,8 @@ type Options struct {
 	HealthzPort int
 	// Change the threadedness per GVK
 	GVKThreadiness map[schema.GroupVersionKind]int
+	// Split the worker queues for these GVKs
+	GVKQueueSplitters map[schema.GroupVersionKind]nruntime.WorkerQueueSplitter
 }
 
 func (o *Options) complete() (*Options, error) {
@@ -61,7 +63,14 @@ func (o *Options) complete() (*Options, error) {
 		}
 	}
 
-	defaultConfig := nruntime.Config{GroupConfig: nruntime.GroupConfig{Rest: result.DefaultRESTConfig, Namespace: result.DefaultNamespace}, GVKThreadiness: result.GVKThreadiness}
+	defaultConfig := nruntime.Config{
+		GroupConfig: nruntime.GroupConfig{
+			Rest:      result.DefaultRESTConfig,
+			Namespace: result.DefaultNamespace,
+		},
+		GVKThreadiness:    result.GVKThreadiness,
+		GVKQueueSplitters: result.GVKQueueSplitters,
+	}
 	backend, err := nruntime.NewRuntimeWithConfigs(defaultConfig, result.APIGroupConfigs, result.Scheme)
 	if err != nil {
 		return nil, err
@@ -93,7 +102,7 @@ func DefaultOptions(routerName string, scheme *runtime.Scheme) (*Options, error)
 }
 
 // DefaultRouter The routerName is important as this name will be used to assign ownership of objects created by this
-// router. Specifically the routerName is assigned to the sub-context in the apply actions. Additionally, the routerName
+// router. Specifically, the routerName is assigned to the sub-context in the apply actions. Additionally, the routerName
 // will be used for the leader election lease lock.
 func DefaultRouter(routerName string, scheme *runtime.Scheme) (*router.Router, error) {
 	opts, err := DefaultOptions(routerName, scheme)

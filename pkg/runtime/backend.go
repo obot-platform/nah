@@ -82,8 +82,8 @@ func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
 	return nil
 }
 
-func (b *Backend) Trigger(gvk schema.GroupVersionKind, key string, delay time.Duration) error {
-	controller, err := b.cacheFactory.ForKind(gvk)
+func (b *Backend) Trigger(ctx context.Context, gvk schema.GroupVersionKind, key string, delay time.Duration) error {
+	controller, err := b.cacheFactory.ForKind(ctx, gvk)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (b *Backend) addIndexer(ctx context.Context, gvk schema.GroupVersionKind) e
 }
 
 func (b *Backend) Watcher(ctx context.Context, gvk schema.GroupVersionKind, name string, cb backend.Callback) error {
-	c, err := b.cacheFactory.ForKind(gvk)
+	c, err := b.cacheFactory.ForKind(ctx, gvk)
 	if err != nil {
 		return err
 	}

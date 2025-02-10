@@ -44,7 +44,7 @@ func (m *triggers) invokeTriggers(req Request) {
 		for _, matcher := range matchers {
 			if matcher.Match(req.Namespace, req.Name, req.Object) {
 				log.Debugf("Triggering [%s] [%v] from [%s] [%v]", et.key, et.gvk, req.Key, req.GVK)
-				_ = m.trigger.Trigger(et.gvk, et.key, 0)
+				_ = m.trigger.Trigger(req.Ctx, et.gvk, et.key, 0)
 				break
 			}
 		}
@@ -133,7 +133,7 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 				}
 				if targetGVK == req.GVK && mt.Match(req.Namespace, req.Name, req.Object) {
 					log.Debugf("Triggering [%s] [%v] from [%s] [%v] on delete", target.key, target.gvk, req.Key, req.GVK)
-					_ = m.trigger.Trigger(target.gvk, target.key, 0)
+					_ = m.trigger.Trigger(req.Ctx, target.gvk, target.key, 0)
 				}
 			}
 		}

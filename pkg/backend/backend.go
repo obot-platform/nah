@@ -13,7 +13,7 @@ import (
 type Callback func(gvk schema.GroupVersionKind, key string, obj runtime.Object) (runtime.Object, error)
 
 type Trigger interface {
-	Trigger(gvk schema.GroupVersionKind, key string, delay time.Duration) error
+	Trigger(ctx context.Context, gvk schema.GroupVersionKind, key string, delay time.Duration) error
 }
 
 type Watcher interface {

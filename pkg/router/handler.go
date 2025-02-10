@@ -233,7 +233,7 @@ func (m *HandlerSet) checkDelay(gvk schema.GroupVersionKind, key string) bool {
 			m.limiterLock.Lock()
 			defer m.limiterLock.Unlock()
 			delete(m.waiting, lKey)
-			_ = m.backend.Trigger(gvk, ReplayPrefix+key, 0)
+			_ = m.backend.Trigger(m.ctx, gvk, ReplayPrefix+key, 0)
 		}()
 		return false
 	}
@@ -341,7 +341,7 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 		req.Object = newObj
 
 		if resp.delay > 0 {
-			if err := m.backend.Trigger(gvk, key, resp.delay); err != nil {
+			if err := m.backend.Trigger(m.ctx, gvk, key, resp.delay); err != nil {
 				return nil, err
 			}
 		}
