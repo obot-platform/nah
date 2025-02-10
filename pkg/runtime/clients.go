@@ -19,7 +19,8 @@ type Runtime struct {
 
 type Config struct {
 	GroupConfig
-	GVKThreadiness map[schema.GroupVersionKind]int
+	GVKThreadiness    map[schema.GroupVersionKind]int
+	GVKQueueSplitters map[schema.GroupVersionKind]WorkerQueueSplitter
 }
 
 type GroupConfig struct {
@@ -69,7 +70,8 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Grou
 	aggCache := multi.NewCache(scheme, theCache, caches)
 
 	factory := NewSharedControllerFactory(aggUncachedClient, aggCache, &SharedControllerFactoryOptions{
-		KindWorkers: defaultConfig.GVKThreadiness,
+		KindWorkers:       defaultConfig.GVKThreadiness,
+		KindQueueSplitter: defaultConfig.GVKQueueSplitters,
 		// In nah this is only invoked when a key fails to process
 		DefaultRateLimiter: workqueue.NewTypedMaxOfRateLimiter(
 			// This will go .5, 1, 2, 4, 8 seconds, etc up until 15 minutes
