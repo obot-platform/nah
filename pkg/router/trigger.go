@@ -57,8 +57,39 @@ func (m *triggers) invokeTriggers(req Request) {
 }
 
 func (m *triggers) register(gvk schema.GroupVersionKind, key string, targetGVK schema.GroupVersionKind, mr objectMatcher) {
+	matcherKey := mr.String()
+	if !m.shouldAddTrigger(gvk, key, targetGVK, matcherKey) {
+		return
+	}
+
+	target := enqueueTarget{
+		key: key,
+		gvk: gvk,
+	}
+
 	m.lock.Lock()
 	defer m.lock.Unlock()
+
+	matchers, ok := m.matchers[groupVersionKind{targetGVK}]
+	if !ok {
+		matchers = make(map[enqueueTarget]map[string]objectMatcher, 1)
+		m.matchers[groupVersionKind{targetGVK}] = matchers
+	}
+
+	if _, ok := matchers[target][matcherKey]; ok {
+		return
+	}
+
+	if matchers[target] == nil {
+		matchers[target] = make(map[string]objectMatcher, 1)
+	}
+
+	matchers[target][matcherKey] = mr
+}
+
+func (m *triggers) shouldAddTrigger(gvk schema.GroupVersionKind, key string, targetGVK schema.GroupVersionKind, matcherKey string) bool {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
 
 	target := enqueueTarget{
 		key: key,
@@ -66,20 +97,11 @@ func (m *triggers) register(gvk schema.GroupVersionKind, key string, targetGVK s
 	}
 	matchers, ok := m.matchers[groupVersionKind{targetGVK}]
 	if !ok {
-		matchers = map[enqueueTarget]map[string]objectMatcher{}
-		m.matchers[groupVersionKind{targetGVK}] = matchers
+		return true
 	}
 
-	matcherKey := mr.String()
-	if _, ok := matchers[target][matcherKey]; ok {
-		return
-	}
-
-	if matchers[target] == nil {
-		matchers[target] = map[string]objectMatcher{}
-	}
-
-	matchers[target][matcherKey] = mr
+	_, ok = matchers[target][matcherKey]
+	return !ok
 }
 
 func (m *triggers) Trigger(req Request) {
