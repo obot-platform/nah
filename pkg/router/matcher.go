@@ -1,6 +1,8 @@
 package router
 
 import (
+	"encoding/json"
+
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -81,4 +83,17 @@ func (o *objectMatcher) Match(ns, name string, obj kclient.Object) bool {
 		}
 	}
 	return o.Namespace == "" || o.Namespace == ns
+}
+
+func (o objectMatcher) MarshalJSON() ([]byte, error) {
+	m := make(map[string]any, 4)
+	m["name"] = o.Name
+	m["namespace"] = o.Namespace
+	if o.Selector != nil {
+		m["label selector"] = o.Selector.String()
+	}
+	if o.Fields != nil {
+		m["field selector"] = o.Fields.String()
+	}
+	return json.MarshalIndent(m, "", "  ")
 }

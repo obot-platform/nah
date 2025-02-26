@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 
@@ -16,7 +17,7 @@ import (
 
 type triggers struct {
 	lock      sync.RWMutex
-	matchers  map[schema.GroupVersionKind]map[enqueueTarget]map[string]objectMatcher
+	matchers  map[groupVersionKind]map[enqueueTarget]map[string]objectMatcher
 	trigger   backend.Trigger
 	gvkLookup backend.Backend
 	scheme    *runtime.Scheme
@@ -32,11 +33,15 @@ type enqueueTarget struct {
 	gvk schema.GroupVersionKind
 }
 
+func (et enqueueTarget) MarshalText() ([]byte, error) {
+	return []byte(et.gvk.String() + ": " + et.key), nil
+}
+
 func (m *triggers) invokeTriggers(req Request) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
-	for et, matchers := range m.matchers[req.GVK] {
+	for et, matchers := range m.matchers[groupVersionKind{req.GVK}] {
 		if et.gvk == req.GVK &&
 			et.key == req.Key {
 			continue
@@ -59,10 +64,10 @@ func (m *triggers) register(gvk schema.GroupVersionKind, key string, targetGVK s
 		key: key,
 		gvk: gvk,
 	}
-	matchers, ok := m.matchers[targetGVK]
+	matchers, ok := m.matchers[groupVersionKind{targetGVK}]
 	if !ok {
 		matchers = map[enqueueTarget]map[string]objectMatcher{}
-		m.matchers[targetGVK] = matchers
+		m.matchers[groupVersionKind{targetGVK}] = matchers
 	}
 
 	matcherKey := mr.String()
@@ -112,7 +117,7 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	remainingMatchers := map[schema.GroupVersionKind]map[enqueueTarget]map[string]objectMatcher{}
+	remainingMatchers := map[groupVersionKind]map[enqueueTarget]map[string]objectMatcher{}
 
 	for targetGVK, matchers := range m.matchers {
 		for target, mts := range matchers {
@@ -121,7 +126,7 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 				continue
 			}
 			for _, mt := range mts {
-				if targetGVK != req.GVK || mt.Namespace != req.Namespace || mt.Name != req.Name {
+				if targetGVK.GroupVersionKind != req.GVK || mt.Namespace != req.Namespace || mt.Name != req.Name {
 					// If the matcher matches the deleted object exactly, then skip the matcher.
 					if remainingMatchers[targetGVK] == nil {
 						remainingMatchers[targetGVK] = make(map[enqueueTarget]map[string]objectMatcher)
@@ -131,7 +136,7 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 					}
 					remainingMatchers[targetGVK][target][mt.String()] = mt
 				}
-				if targetGVK == req.GVK && mt.Match(req.Namespace, req.Name, req.Object) {
+				if targetGVK.GroupVersionKind == req.GVK && mt.Match(req.Namespace, req.Name, req.Object) {
 					log.Debugf("Triggering [%s] [%v] from [%s] [%v] on delete", target.key, target.gvk, req.Key, req.GVK)
 					_ = m.trigger.Trigger(req.Ctx, target.gvk, target.key, 0)
 				}
@@ -140,4 +145,23 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 	}
 
 	m.matchers = remainingMatchers
+}
+
+func (m *triggers) Dump(indent bool) ([]byte, error) {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	if !indent {
+		return json.Marshal(m.matchers)
+	}
+
+	return json.MarshalIndent(m.matchers, "", "  ")
+}
+
+type groupVersionKind struct {
+	schema.GroupVersionKind
+}
+
+func (gvk groupVersionKind) MarshalText() ([]byte, error) {
+	return []byte(gvk.String()), nil
 }

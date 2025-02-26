@@ -55,6 +55,15 @@ func (r *Router) Backend() backend.Backend {
 	return r.handlers.backend
 }
 
+func (r *Router) DumpTriggers(indent bool) ([]byte, error) {
+	b, err := r.handlers.triggers.Dump(indent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dump triggers: %w", err)
+	}
+
+	return b, nil
+}
+
 type RouteBuilder struct {
 	includeRemove     bool
 	includeFinalizing bool
