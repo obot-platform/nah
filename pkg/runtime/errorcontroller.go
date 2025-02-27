@@ -21,6 +21,9 @@ func (n *errorController) Enqueue(namespace, name string) {
 func (n *errorController) EnqueueAfter(namespace, name string, delay time.Duration) {
 }
 
+func (n *errorController) EnqueueKeyAfter(key string, delay time.Duration) {
+}
+
 func (n *errorController) EnqueueKey(key string) {
 }
 

@@ -327,7 +327,7 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 	if unmodifiedObject == nil {
 		// A nil object here means that the object was deleted, so unregister the triggers
 		m.triggers.UnregisterAndTrigger(req)
-	} else {
+	} else if !req.FromTrigger {
 		m.triggers.Trigger(req)
 	}
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -87,16 +86,8 @@ func (b *Backend) Trigger(ctx context.Context, gvk schema.GroupVersionKind, key 
 	if err != nil {
 		return err
 	}
-	if delay > 0 {
-		ns, name, ok := strings.Cut(key, "/")
-		if ok {
-			controller.EnqueueAfter(ns, name, delay)
-		} else {
-			controller.EnqueueAfter("", key, delay)
-		}
-	} else {
-		controller.EnqueueKey(router.TriggerPrefix + key)
-	}
+
+	controller.EnqueueKeyAfter(router.TriggerPrefix+key, delay)
 	return nil
 }
 
