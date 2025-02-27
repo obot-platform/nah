@@ -53,6 +53,10 @@ func (s *sharedController) EnqueueAfter(namespace, name string, delay time.Durat
 	s.initController().EnqueueAfter(namespace, name, delay)
 }
 
+func (s *sharedController) EnqueueKeyAfter(key string, delay time.Duration) {
+	s.initController().EnqueueKeyAfter(key, delay)
+}
+
 func (s *sharedController) EnqueueKey(key string) {
 	s.initController().EnqueueKey(key)
 }

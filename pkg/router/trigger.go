@@ -105,9 +105,7 @@ func (m *triggers) shouldAddTrigger(gvk schema.GroupVersionKind, key string, tar
 }
 
 func (m *triggers) Trigger(req Request) {
-	if !req.FromTrigger {
-		m.invokeTriggers(req)
-	}
+	m.invokeTriggers(req)
 }
 
 func (m *triggers) Register(sourceGVK schema.GroupVersionKind, key string, obj runtime.Object, namespace, name string, selector labels.Selector, fields fields.Selector) (schema.GroupVersionKind, bool, error) {

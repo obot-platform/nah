@@ -40,6 +40,7 @@ type Controller interface {
 	Enqueue(namespace, name string)
 	EnqueueAfter(namespace, name string, delay time.Duration)
 	EnqueueKey(key string)
+	EnqueueKeyAfter(key string, delay time.Duration)
 	Cache() (cache.Cache, error)
 	Start(ctx context.Context, workers int) error
 }
@@ -206,7 +207,7 @@ func (c *controller) Start(ctx context.Context, workers int) error {
 	if c.registration == nil {
 		registration, err := c.informer.AddEventHandler(clientgocache.ResourceEventHandlerFuncs{
 			AddFunc: c.handleObject,
-			UpdateFunc: func(old, new interface{}) {
+			UpdateFunc: func(old, new any) {
 				c.handleObject(new)
 			},
 			DeleteFunc: c.handleObject,
@@ -332,27 +333,22 @@ func (c *controller) syncHandler(ctx context.Context, key string) error {
 }
 
 func (c *controller) EnqueueKey(key string) {
+	c.EnqueueKeyAfter(key, 0)
+}
+
+func (c *controller) EnqueueKeyAfter(key string, after time.Duration) {
 	c.startLock.Lock()
 	defer c.startLock.Unlock()
 
 	if c.workqueues == nil {
-		c.startKeys = append(c.startKeys, startKey{key: key})
+		c.startKeys = append(c.startKeys, startKey{key: key, after: after})
 	} else {
-		c.workqueues[c.splitter.Split(key)].Add(key)
+		c.workqueues[c.splitter.Split(key)].AddAfter(key, after)
 	}
 }
 
 func (c *controller) Enqueue(namespace, name string) {
-	key := keyFunc(namespace, name)
-
-	c.startLock.Lock()
-	defer c.startLock.Unlock()
-
-	if c.workqueues == nil {
-		c.startKeys = append(c.startKeys, startKey{key: key})
-	} else {
-		c.workqueues[c.splitter.Split(key)].AddRateLimited(key)
-	}
+	c.EnqueueAfter(namespace, name, 0)
 }
 
 func (c *controller) EnqueueAfter(namespace, name string, duration time.Duration) {
