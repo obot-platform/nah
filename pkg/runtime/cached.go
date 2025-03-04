@@ -161,7 +161,7 @@ func (c *cacheClient) List(ctx context.Context, list kclient.ObjectList, opts ..
 	if u, ok := list.(*untriggered.HolderList); ok {
 		list = u.ObjectList
 		if u.IsUncached() {
-			return c.uncached.List(ctx, u, opts...)
+			return c.uncached.List(ctx, list, opts...)
 		}
 	}
 	return c.cached.List(ctx, list, opts...)

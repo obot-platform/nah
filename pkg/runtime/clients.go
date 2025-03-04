@@ -4,7 +4,8 @@ import (
 	"time"
 
 	"github.com/obot-platform/nah/pkg/mapper"
-	"github.com/obot-platform/nah/pkg/runtime/multi"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
@@ -18,60 +19,34 @@ type Runtime struct {
 }
 
 type Config struct {
-	GroupConfig
+	Rest              *rest.Config
+	Namespace         string
+	FieldSelector     fields.Selector
+	LabelSelector     labels.Selector
+	ByObject          map[client.Object]cache.ByObject
 	GVKThreadiness    map[schema.GroupVersionKind]int
 	GVKQueueSplitters map[schema.GroupVersionKind]WorkerQueueSplitter
 }
 
-type GroupConfig struct {
-	Rest      *rest.Config
-	Namespace string
-}
-
 func NewRuntime(cfg *rest.Config, scheme *runtime.Scheme) (*Runtime, error) {
 	return NewRuntimeWithConfig(Config{
-		GroupConfig: GroupConfig{
-			Rest: cfg,
-		},
+		Rest: cfg,
 	}, scheme)
 }
 
 func NewRuntimeForNamespace(cfg *rest.Config, namespace string, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfigs(Config{GroupConfig: GroupConfig{Rest: cfg, Namespace: namespace}}, nil, scheme)
+	return NewRuntimeWithConfig(Config{Rest: cfg, Namespace: namespace}, scheme)
 }
 
 func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) {
-	return NewRuntimeWithConfigs(cfg, nil, scheme)
-}
-
-func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]GroupConfig, scheme *runtime.Scheme) (*Runtime, error) {
-	clients := make(map[string]client.WithWatch, len(apiGroupConfigs))
-	cachedClients := make(map[string]client.Client, len(apiGroupConfigs))
-	caches := make(map[string]cache.Cache, len(apiGroupConfigs))
-
-	for key, cfg := range apiGroupConfigs {
-		uncachedClient, cachedClient, theCache, err := getClients(cfg, scheme)
-		if err != nil {
-			return nil, err
-		}
-
-		clients[key] = uncachedClient
-		caches[key] = theCache
-		cachedClients[key] = cachedClient
-	}
-
-	uncachedClient, cachedClient, theCache, err := getClients(defaultConfig.GroupConfig, scheme)
+	uncachedClient, cachedClient, theCache, err := getClients(cfg, scheme)
 	if err != nil {
 		return nil, err
 	}
 
-	aggUncachedClient := multi.NewWithWatch(uncachedClient, clients)
-	aggCachedClient := multi.NewClient(cachedClient, cachedClients)
-	aggCache := multi.NewCache(scheme, theCache, caches)
-
-	factory := NewSharedControllerFactory(aggUncachedClient, aggCache, &SharedControllerFactoryOptions{
-		KindWorkers:       defaultConfig.GVKThreadiness,
-		KindQueueSplitter: defaultConfig.GVKQueueSplitters,
+	factory := NewSharedControllerFactory(uncachedClient, theCache, &SharedControllerFactoryOptions{
+		KindWorkers:       cfg.GVKThreadiness,
+		KindQueueSplitter: cfg.GVKQueueSplitters,
 		// In nah this is only invoked when a key fails to process
 		DefaultRateLimiter: workqueue.NewTypedMaxOfRateLimiter(
 			// This will go .5, 1, 2, 4, 8 seconds, etc up until 15 minutes
@@ -80,11 +55,11 @@ func NewRuntimeWithConfigs(defaultConfig Config, apiGroupConfigs map[string]Grou
 	})
 
 	return &Runtime{
-		Backend: newBackend(factory, newCacheClient(aggUncachedClient, aggCachedClient), aggCache),
+		Backend: newBackend(factory, newCacheClient(uncachedClient, cachedClient), theCache),
 	}, nil
 }
 
-func getClients(cfg GroupConfig, scheme *runtime.Scheme) (uncachedClient client.WithWatch, cachedClient client.Client, theCache cache.Cache, err error) {
+func getClients(cfg Config, scheme *runtime.Scheme) (uncachedClient client.WithWatch, cachedClient client.Client, theCache cache.Cache, err error) {
 	mapper, err := mapper.New(cfg.Rest)
 	if err != nil {
 		return nil, nil, nil, err
@@ -105,9 +80,12 @@ func getClients(cfg GroupConfig, scheme *runtime.Scheme) (uncachedClient client.
 	}
 
 	theCache, err = cache.New(cfg.Rest, cache.Options{
-		Mapper:            mapper,
-		Scheme:            scheme,
-		DefaultNamespaces: namespaces,
+		Mapper:               mapper,
+		Scheme:               scheme,
+		DefaultNamespaces:    namespaces,
+		DefaultFieldSelector: cfg.FieldSelector,
+		DefaultLabelSelector: cfg.LabelSelector,
+		ByObject:             cfg.ByObject,
 	})
 	if err != nil {
 		return nil, nil, nil, err
