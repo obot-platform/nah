@@ -8,9 +8,13 @@ import (
 	"github.com/obot-platform/nah/pkg/restconfig"
 	"github.com/obot-platform/nah/pkg/router"
 	nruntime "github.com/obot-platform/nah/pkg/runtime"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const defaultHealthzPort = 8888
@@ -19,14 +23,17 @@ type Options struct {
 	// If the backend is nil, then DefaultRESTConfig, DefaultNamespace, and Scheme are used to create a backend.
 	Backend backend.Backend
 	// If a Backend is provided, then this is ignored. If not provided and needed, then a default is created with Scheme.
-	DefaultRESTConfig *rest.Config
+	RESTConfig *rest.Config
 	// If a Backend is provided, then this is ignored.
-	DefaultNamespace string
+	Namespace string
+	// If a Backend is provided, then this is ignored.
+	LabelSelector labels.Selector
+	// If a Backend is provided, then this is ignored.
+	FieldSelector fields.Selector
+	// If a Backend is provided, then this is ignored.
+	ByObject map[client.Object]cache.ByObject
 	// If a Backend is provided, then this is ignored.
 	Scheme *runtime.Scheme
-	// APIGroupConfigs are keyed by an API group. This indicates to the router that all actions on this group should use the
-	// given Config. This is useful for routers that watch different objects on different API servers.
-	APIGroupConfigs map[string]nruntime.GroupConfig
 	// ElectionConfig being nil represents no leader election for the router.
 	ElectionConfig *leader.ElectionConfig
 	// Defaults to 8888
@@ -55,23 +62,24 @@ func (o *Options) complete() (*Options, error) {
 		return &result, nil
 	}
 
-	if result.DefaultRESTConfig == nil {
+	if result.RESTConfig == nil {
 		var err error
-		result.DefaultRESTConfig, err = restconfig.New(result.Scheme)
+		result.RESTConfig, err = restconfig.New(result.Scheme)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	defaultConfig := nruntime.Config{
-		GroupConfig: nruntime.GroupConfig{
-			Rest:      result.DefaultRESTConfig,
-			Namespace: result.DefaultNamespace,
-		},
+		Rest:              result.RESTConfig,
+		Namespace:         result.Namespace,
+		LabelSelector:     result.LabelSelector,
+		FieldSelector:     result.FieldSelector,
+		ByObject:          result.ByObject,
 		GVKThreadiness:    result.GVKThreadiness,
 		GVKQueueSplitters: result.GVKQueueSplitters,
 	}
-	backend, err := nruntime.NewRuntimeWithConfigs(defaultConfig, result.APIGroupConfigs, result.Scheme)
+	backend, err := nruntime.NewRuntimeWithConfig(defaultConfig, result.Scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -93,11 +101,11 @@ func DefaultOptions(routerName string, scheme *runtime.Scheme) (*Options, error)
 	}
 
 	return &Options{
-		Backend:           rt.Backend,
-		DefaultRESTConfig: cfg,
-		Scheme:            scheme,
-		ElectionConfig:    leader.NewDefaultElectionConfig("", routerName, cfg),
-		HealthzPort:       defaultHealthzPort,
+		Backend:        rt.Backend,
+		RESTConfig:     cfg,
+		Scheme:         scheme,
+		ElectionConfig: leader.NewDefaultElectionConfig("", routerName, cfg),
+		HealthzPort:    defaultHealthzPort,
 	}, nil
 }
 
