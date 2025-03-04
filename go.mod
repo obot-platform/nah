@@ -1,8 +1,6 @@
 module github.com/obot-platform/nah
 
-go 1.23
-
-toolchain go1.23.2
+go 1.24.0
 
 require (
 	github.com/bombsimon/logrusr/v4 v4.1.0
