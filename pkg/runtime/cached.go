@@ -145,9 +145,8 @@ func (c *cacheClient) Get(ctx context.Context, key kclient.ObjectKey, obj kclien
 	if apierrors.IsNotFound(getErr) {
 		if ok {
 			return CopyInto(obj, cachedObj.Object)
-		} else {
-			return c.uncached.Get(ctx, key, obj, opts...)
 		}
+		return getErr
 	}
 
 	if ok && newer(obj.GetResourceVersion(), cachedObj.Object.GetResourceVersion()) {
