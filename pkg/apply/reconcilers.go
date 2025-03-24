@@ -152,7 +152,7 @@ func reconcileJob(oldObj, newObj kclient.Object) (bool, error) {
 	return false, nil
 }
 
-func convertObj(src interface{}, obj interface{}) error {
+func convertObj(src any, obj any) error {
 	uObj, ok := src.(*unstructured.Unstructured)
 	if !ok {
 		return fmt.Errorf("expected unstructured but got %v", reflect.TypeOf(src))

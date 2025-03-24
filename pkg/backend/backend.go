@@ -10,7 +10,7 @@ import (
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type Callback func(gvk schema.GroupVersionKind, key string, obj runtime.Object) (runtime.Object, error)
+type Callback func(ctx context.Context, gvk schema.GroupVersionKind, key string, obj runtime.Object) (runtime.Object, error)
 
 type Trigger interface {
 	Trigger(ctx context.Context, gvk schema.GroupVersionKind, key string, delay time.Duration) error

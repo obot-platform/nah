@@ -12,6 +12,7 @@ import (
 	"github.com/obot-platform/nah/pkg/fields"
 	"github.com/obot-platform/nah/pkg/router"
 	"github.com/obot-platform/nah/pkg/untriggered"
+	"go.opentelemetry.io/otel"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kcache "k8s.io/client-go/tools/cache"
@@ -20,7 +21,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
-var DefaultThreadiness = 5
+var (
+	DefaultThreadiness = 5
+	tracer             = otel.Tracer("nah/runtime")
+)
 
 func init() {
 	i, _ := strconv.Atoi(os.Getenv("NAH_THREADINESS"))
@@ -48,14 +52,23 @@ func newBackend(cacheFactory SharedControllerFactory, client *cacheClient, cache
 }
 
 func (b *Backend) Start(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "start")
+	defer span.End()
+
 	return b.start(ctx, false)
 }
 
 func (b *Backend) Preload(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "preload")
+	defer span.End()
+
 	return b.start(ctx, true)
 }
 
 func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
+	ctx, span := tracer.Start(ctx, "start")
+	defer span.End()
+
 	b.startedLock.Lock()
 	defer b.startedLock.Unlock()
 	defer func() {
@@ -71,6 +84,8 @@ func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
 	if err != nil {
 		return err
 	}
+
+	span.AddEvent("waiting for caches to sync")
 	if !b.cache.WaitForCacheSync(ctx) {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
@@ -109,7 +124,7 @@ func (b *Backend) addIndexer(ctx context.Context, gvk schema.GroupVersionKind) e
 	indexers := map[string]kcache.IndexFunc{}
 	for _, field := range f.FieldNames() {
 		field := field
-		indexers["field:"+field] = func(obj interface{}) ([]string, error) {
+		indexers["field:"+field] = func(obj any) ([]string, error) {
 			f, ok := obj.(fields.Fields)
 			if !ok {
 				return nil, nil
@@ -129,6 +144,9 @@ func (b *Backend) addIndexer(ctx context.Context, gvk schema.GroupVersionKind) e
 }
 
 func (b *Backend) Watcher(ctx context.Context, gvk schema.GroupVersionKind, name string, cb backend.Callback) error {
+	ctx, span := tracer.Start(ctx, "watcher")
+	defer span.End()
+
 	c, err := b.cacheFactory.ForKind(ctx, gvk)
 	if err != nil {
 		return err
@@ -136,8 +154,8 @@ func (b *Backend) Watcher(ctx context.Context, gvk schema.GroupVersionKind, name
 	if err := b.addIndexer(ctx, gvk); err != nil {
 		return err
 	}
-	handler := SharedControllerHandlerFunc(func(key string, obj runtime.Object) (runtime.Object, error) {
-		return cb(gvk, key, obj)
+	handler := SharedControllerHandlerFunc(func(ctx context.Context, key string, obj runtime.Object) (runtime.Object, error) {
+		return cb(ctx, gvk, key, obj)
 	})
 	if err := c.RegisterHandler(ctx, fmt.Sprintf("%s %v", name, gvk), handler); err != nil {
 		return err
@@ -162,10 +180,16 @@ func (b *Backend) GVKForObject(obj runtime.Object, scheme *runtime.Scheme) (sche
 }
 
 func (b *Backend) IndexField(ctx context.Context, obj kclient.Object, field string, extractValue kclient.IndexerFunc) error {
+	ctx, span := tracer.Start(ctx, "indexField")
+	defer span.End()
+
 	return b.cache.IndexField(ctx, obj, field, extractValue)
 }
 
 func (b *Backend) GetInformerForKind(ctx context.Context, gvk schema.GroupVersionKind) (kcache.SharedIndexInformer, error) {
+	ctx, span := tracer.Start(ctx, "getInformerForKind")
+	defer span.End()
+
 	i, err := b.cache.GetInformerForKind(ctx, gvk)
 	if err != nil {
 		return nil, err

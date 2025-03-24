@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/obot-platform/nah/pkg/mapper"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -65,9 +66,17 @@ func getClients(cfg Config, scheme *runtime.Scheme) (uncachedClient client.WithW
 		return nil, nil, nil, err
 	}
 
+	httpClient, err := rest.HTTPClientFor(cfg.Rest)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
+
 	uncachedClient, err = client.NewWithWatch(cfg.Rest, client.Options{
-		Scheme: scheme,
-		Mapper: mapper,
+		HTTPClient: httpClient,
+		Scheme:     scheme,
+		Mapper:     mapper,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -80,6 +89,7 @@ func getClients(cfg Config, scheme *runtime.Scheme) (uncachedClient client.WithW
 	}
 
 	theCache, err = cache.New(cfg.Rest, cache.Options{
+		HTTPClient:           httpClient,
 		Mapper:               mapper,
 		Scheme:               scheme,
 		DefaultNamespaces:    namespaces,
@@ -92,8 +102,9 @@ func getClients(cfg Config, scheme *runtime.Scheme) (uncachedClient client.WithW
 	}
 
 	cachedClient, err = client.New(cfg.Rest, client.Options{
-		Scheme: scheme,
-		Mapper: mapper,
+		HTTPClient: httpClient,
+		Scheme:     scheme,
+		Mapper:     mapper,
 		Cache: &client.CacheOptions{
 			Reader: theCache,
 		},

@@ -25,7 +25,7 @@ var (
 	}
 )
 
-func Unmarshal(data []byte, v interface{}) error {
+func Unmarshal(data []byte, v any) error {
 	return yamlDecoder.NewYAMLToJSONDecoder(bytes.NewBuffer(data)).Decode(v)
 }
 
@@ -58,7 +58,7 @@ func toObjects(bytes []byte) ([]runtime.Object, error) {
 		return nil, err
 	}
 
-	check := map[string]interface{}{}
+	check := map[string]any{}
 	if err := json.Unmarshal(bytes, &check); err != nil || len(check) == 0 {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func CleanObjectForExport(scheme *runtime.Scheme, obj runtime.Object) (runtime.O
 	if obj.GetObjectKind().GroupVersionKind().Kind == "" {
 		if gvk, err := apiutil.GVKForObject(obj, scheme); err == nil {
 			obj.GetObjectKind().SetGroupVersionKind(gvk)
-		} else if err != nil {
+		} else {
 			return nil, fmt.Errorf("kind and/or apiVersion is not set on input object %v: %w", obj, err)
 		}
 	}
@@ -128,7 +128,7 @@ func CleanObjectForExport(scheme *runtime.Scheme, obj runtime.Object) (runtime.O
 		Object: data,
 	}
 
-	metadata := map[string]interface{}{}
+	metadata := map[string]any{}
 
 	if name := unstr.GetName(); len(name) > 0 {
 		metadata["name"] = name
@@ -161,7 +161,7 @@ func CleanObjectForExport(scheme *runtime.Scheme, obj runtime.Object) (runtime.O
 	if spec, ok := data["spec"]; ok {
 		if spec == nil {
 			delete(data, "spec")
-		} else if m, ok := spec.(map[string]interface{}); ok && len(m) == 0 {
+		} else if m, ok := spec.(map[string]any); ok && len(m) == 0 {
 			delete(data, "spec")
 		}
 	}

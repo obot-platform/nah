@@ -200,7 +200,7 @@ func (r RouteBuilder) Handler(h Handler) {
 		}
 	}
 
-	r.router.handlers.AddHandler(r.objType, result)
+	r.router.handlers.AddHandler(r.routeName, r.objType, result)
 }
 
 func (r *Router) Start(ctx context.Context) error {

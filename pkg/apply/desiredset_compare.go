@@ -93,7 +93,7 @@ func originalAndModified(gvk schema.GroupVersionKind, oldMetadata v1.Object, new
 	return original, modified, err
 }
 
-func emptyMaps(data map[string]interface{}, keys ...string) bool {
+func emptyMaps(data map[string]any, keys ...string) bool {
 	for _, key := range append(keys, "__invalid_key__") {
 		if len(data) == 0 {
 			// map is empty so all children are empty too
@@ -109,21 +109,21 @@ func emptyMaps(data map[string]interface{}, keys ...string) bool {
 			return false
 		}
 
-		data, _ = value.(map[string]interface{})
+		data, _ = value.(map[string]any)
 	}
 
 	return true
 }
 
-func mapField(data map[string]interface{}, fields ...string) map[string]interface{} {
+func mapField(data map[string]any, fields ...string) map[string]any {
 	obj, _, _ := unstructured.NestedFieldNoCopy(data, fields...)
-	v, _ := obj.(map[string]interface{})
+	v, _ := obj.(map[string]any)
 	return v
 }
 
 func sanitizePatch(patch []byte, removeObjectSetAnnotation bool) ([]byte, error) {
 	mod := false
-	data := map[string]interface{}{}
+	data := map[string]any{}
 	err := json.Unmarshal(patch, &data)
 	if err != nil {
 		return nil, err
@@ -267,14 +267,14 @@ func (a *apply) compareObjects(gvk schema.GroupVersionKind, debugID string, oldO
 	return nil
 }
 
-func removeMetadataFields(data map[string]interface{}) bool {
+func removeMetadataFields(data map[string]any) bool {
 	metadata, ok := data["metadata"]
 	if !ok {
 		return false
 	}
 
 	mod := false
-	data, _ = metadata.(map[string]interface{})
+	data, _ = metadata.(map[string]any)
 	for _, key := range []string{"creationTimestamp", "generation", "resourceVersion", "uid", "managedFields"} {
 		if _, ok := data[key]; ok {
 			delete(data, key)
@@ -291,7 +291,7 @@ func getOriginalObject(gvk schema.GroupVersionKind, obj v1.Object) (kclient.Obje
 		return nil, nil
 	}
 
-	mapObj := map[string]interface{}{}
+	mapObj := map[string]any{}
 	err := json.Unmarshal(original, &mapObj)
 	if err != nil {
 		return nil, err
@@ -337,13 +337,13 @@ func appliedFromAnnotation(str string) []byte {
 	return b
 }
 
-func pruneList(data []interface{}) []interface{} {
-	result := make([]interface{}, 0, len(data))
+func pruneList(data []any) []any {
+	result := make([]any, 0, len(data))
 	for _, v := range data {
 		switch typed := v.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			result = append(result, pruneValues(typed, true))
-		case []interface{}:
+		case []any:
 			result = append(result, pruneList(typed))
 		default:
 			result = append(result, v)
@@ -352,13 +352,13 @@ func pruneList(data []interface{}) []interface{} {
 	return result
 }
 
-func pruneValues(data map[string]interface{}, isList bool) map[string]interface{} {
-	result := map[string]interface{}{}
+func pruneValues(data map[string]any, isList bool) map[string]any {
+	result := map[string]any{}
 	for k, v := range data {
 		switch typed := v.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			result[k] = pruneValues(typed, false)
-		case []interface{}:
+		case []any:
 			result[k] = pruneList(typed)
 		default:
 			if isList && knownListKeys[k] {
