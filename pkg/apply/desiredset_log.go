@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	LogInfo func(format string, args ...interface{})
+	LogInfo func(format string, args ...any)
 )
 
 func (a *apply) log(operation string, gvk schema.GroupVersionKind, obj kclient.Object) {

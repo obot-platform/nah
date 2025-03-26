@@ -13,29 +13,29 @@ var (
 	//
 	//  or you can call SetLogger
 
-	Infof = func(message string, obj ...interface{}) {
+	Infof = func(message string, obj ...any) {
 		//log.Printf("INFO: "+message+"\n", obj...)
 	}
-	Warnf = func(message string, obj ...interface{}) {
+	Warnf = func(message string, obj ...any) {
 		log.Printf("WARN [NAH]: "+message+"\n", obj...)
 	}
-	Errorf = func(message string, obj ...interface{}) {
+	Errorf = func(message string, obj ...any) {
 		log.Printf("ERROR[NAH]: "+message+"\n", obj...)
 	}
-	Fatalf = func(message string, obj ...interface{}) {
+	Fatalf = func(message string, obj ...any) {
 		log.Fatalf("FATAL[NAH]: "+message+"\n", obj...)
 	}
-	Debugf = func(message string, obj ...interface{}) {
+	Debugf = func(message string, obj ...any) {
 		//log.Printf("DEBUG: "+message+"\n", obj...)
 	}
 )
 
 type Logger interface {
-	Infof(message string, obj ...interface{})
-	Warnf(message string, obj ...interface{})
-	Errorf(message string, obj ...interface{})
-	Fatalf(message string, obj ...interface{})
-	Debugf(message string, obj ...interface{})
+	Infof(message string, obj ...any)
+	Warnf(message string, obj ...any)
+	Errorf(message string, obj ...any)
+	Fatalf(message string, obj ...any)
+	Debugf(message string, obj ...any)
 }
 
 func SetLogger(logger Logger) {

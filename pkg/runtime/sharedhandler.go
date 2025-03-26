@@ -9,8 +9,11 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"slices"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 var (
@@ -28,6 +31,7 @@ type SharedHandler struct {
 	idCounter int64
 
 	lock     sync.RWMutex
+	gvk      schema.GroupVersionKind
 	handlers []handlerEntry
 }
 
@@ -48,14 +52,14 @@ func (h *SharedHandler) Register(ctx context.Context, name string, handler Share
 
 		for i := range h.handlers {
 			if h.handlers[i].id == id {
-				h.handlers = append(h.handlers[:i], h.handlers[i+1:]...)
+				h.handlers = slices.Delete(h.handlers, i, i+1)
 				break
 			}
 		}
 	})
 }
 
-func (h *SharedHandler) OnChange(key string, obj runtime.Object) error {
+func (h *SharedHandler) OnChange(ctx context.Context, key string, obj runtime.Object) error {
 	var (
 		errs errorList
 	)
@@ -64,7 +68,7 @@ func (h *SharedHandler) OnChange(key string, obj runtime.Object) error {
 	h.lock.RUnlock()
 
 	for _, handler := range handlers {
-		newObj, err := handler.handler.OnChange(key, obj)
+		newObj, err := handler.handler.OnChange(ctx, key, obj)
 		if err != nil && !errors.Is(err, ErrIgnore) {
 			errs = append(errs, &handlerError{
 				HandlerName: handler.name,

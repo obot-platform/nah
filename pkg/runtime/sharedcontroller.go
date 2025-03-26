@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -13,7 +15,7 @@ import (
 )
 
 type SharedControllerHandler interface {
-	OnChange(key string, obj runtime.Object) (runtime.Object, error)
+	OnChange(ctx context.Context, key string, obj runtime.Object) (runtime.Object, error)
 }
 
 type SharedController interface {
@@ -22,10 +24,10 @@ type SharedController interface {
 	RegisterHandler(ctx context.Context, name string, handler SharedControllerHandler) error
 }
 
-type SharedControllerHandlerFunc func(key string, obj runtime.Object) (runtime.Object, error)
+type SharedControllerHandlerFunc func(ctx context.Context, key string, obj runtime.Object) (runtime.Object, error)
 
-func (s SharedControllerHandlerFunc) OnChange(key string, obj runtime.Object) (runtime.Object, error) {
-	return s(key, obj)
+func (s SharedControllerHandlerFunc) OnChange(ctx context.Context, key string, obj runtime.Object) (runtime.Object, error) {
+	return s(ctx, key, obj)
 }
 
 type sharedController struct {
@@ -80,6 +82,12 @@ func (s *sharedController) initController() Controller {
 }
 
 func (s *sharedController) Start(ctx context.Context, workers int) error {
+	ctx, span := tracer.Start(ctx, "sharedControllerStart", trace.WithAttributes(
+		attribute.String("gvk", s.gvk.String()),
+		attribute.Int("workers", workers),
+	))
+	defer span.End()
+
 	s.startLock.Lock()
 	defer s.startLock.Unlock()
 

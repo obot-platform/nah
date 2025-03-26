@@ -7,8 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func ToMapInterface(obj interface{}) (map[string]interface{}, error) {
-	if m, ok := obj.(map[string]interface{}); ok {
+func ToMapInterface(obj any) (map[string]any, error) {
+	if m, ok := obj.(map[string]any); ok {
 		return m, nil
 	}
 
@@ -21,7 +21,7 @@ func ToMapInterface(obj interface{}) (map[string]interface{}, error) {
 		return nil, err
 	}
 
-	result := map[string]interface{}{}
+	result := map[string]any{}
 	dec := json.NewDecoder(bytes.NewBuffer(b))
 	dec.UseNumber()
 	return result, dec.Decode(&result)

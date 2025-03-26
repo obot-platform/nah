@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"maps"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -66,14 +67,23 @@ func applyDefaultSharedOptions(opts *SharedControllerFactoryOptions) *SharedCont
 	return &newOpts
 }
 func (s *sharedControllerFactory) Preload(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "sharedControllerFactoryPreload")
+	defer span.End()
+
 	return s.loadAndStart(ctx, false)
 }
 
 func (s *sharedControllerFactory) Start(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "sharedControllerFactoryStart")
+	defer span.End()
+
 	return s.loadAndStart(ctx, true)
 }
 
 func (s *sharedControllerFactory) loadAndStart(ctx context.Context, start bool) error {
+	ctx, span := tracer.Start(ctx, "sharedControllerFactoryLoadAndStart")
+	defer span.End()
+
 	s.controllerLock.Lock()
 	defer s.controllerLock.Unlock()
 
@@ -90,15 +100,14 @@ func (s *sharedControllerFactory) loadAndStart(ctx context.Context, start bool) 
 	}()
 
 	// copy so we can release the lock during cache wait
-	controllersCopy := map[schema.GroupVersionKind]*sharedController{}
-	for k, v := range s.controllers {
-		controllersCopy[k] = v
-	}
+	controllersCopy := make(map[schema.GroupVersionKind]*sharedController, len(s.controllers))
+	maps.Copy(controllersCopy, s.controllers)
 
 	// Do not hold lock while waiting because this can cause a deadlock if
 	// one of the handlers you are waiting on tries to acquire this lock (by looking up
 	// shared controller)
 	s.controllerLock.Unlock()
+	span.AddEvent("waiting for cache sync")
 	s.cache.WaitForCacheSync(ctx)
 	s.controllerLock.Lock()
 
@@ -131,7 +140,7 @@ func (s *sharedControllerFactory) ForKind(ctx context.Context, gvk schema.GroupV
 		return controllerResult, nil
 	}
 
-	handler := &SharedHandler{}
+	handler := &SharedHandler{gvk: gvk}
 
 	controllerResult = &sharedController{
 		deferredController: func() (Controller, error) {

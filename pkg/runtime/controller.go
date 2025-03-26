@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/obot-platform/nah/pkg/log"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,7 +25,7 @@ import (
 const maxTimeout2min = 2 * time.Minute
 
 type Handler interface {
-	OnChange(key string, obj runtime.Object) error
+	OnChange(ctx context.Context, key string, obj runtime.Object) error
 }
 
 type ResourceVersionGetter interface {
@@ -185,6 +187,12 @@ func (c *controller) run(ctx context.Context, workers int) {
 }
 
 func (c *controller) Start(ctx context.Context, workers int) error {
+	ctx, span := tracer.Start(ctx, "controllerStart", trace.WithAttributes(
+		attribute.String("gvk", c.gvk.String()),
+		attribute.Int("workers", workers),
+	))
+	defer span.End()
+
 	c.startLock.Lock()
 	defer c.startLock.Unlock()
 
@@ -224,10 +232,12 @@ func (c *controller) Start(ctx context.Context, workers int) error {
 		}()
 	}
 
+	span.AddEvent("waiting for caches to sync")
 	if ok := clientgocache.WaitForCacheSync(ctx.Done(), c.informer.HasSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
+	span.AddEvent("starting workers")
 	go c.run(ctx, workers)
 	c.started = true
 	return nil
@@ -285,7 +295,14 @@ func (c *controller) runWorkers(ctx context.Context, workers int) {
 	}
 }
 
-func (c *controller) processSingleItem(ctx context.Context, queue workqueue.TypedRateLimitingInterface[any], obj interface{}) error {
+func (c *controller) processSingleItem(ctx context.Context, queue workqueue.TypedRateLimitingInterface[any], obj any) error {
+	// Create a new root span for processing items.
+	ctx, span := tracer.Start(ctx, "processSingleItem", trace.WithNewRoot(), trace.WithAttributes(
+		attribute.String("gvk", c.gvk.String()),
+		attribute.String("key", fmt.Sprintf("%v", obj)),
+	))
+	defer span.End()
+
 	var (
 		key string
 		ok  bool
@@ -314,7 +331,7 @@ func isSpecialKey(key string) bool {
 
 func (c *controller) syncHandler(ctx context.Context, key string) error {
 	if isSpecialKey(key) {
-		return c.handler.OnChange(key, nil)
+		return c.handler.OnChange(ctx, key, nil)
 	}
 
 	ns, name := KeyParse(key)
@@ -324,12 +341,12 @@ func (c *controller) syncHandler(ctx context.Context, key string) error {
 		Namespace: ns,
 	}, obj)
 	if apierror.IsNotFound(err) {
-		return c.handler.OnChange(key, nil)
+		return c.handler.OnChange(ctx, key, nil)
 	} else if err != nil {
 		return err
 	}
 
-	return c.handler.OnChange(key, obj.(runtime.Object))
+	return c.handler.OnChange(ctx, key, obj.(runtime.Object))
 }
 
 func (c *controller) EnqueueKey(key string) {
@@ -385,7 +402,7 @@ func keyFunc(namespace, name string) string {
 	return namespace + "/" + name
 }
 
-func (c *controller) enqueue(obj interface{}) {
+func (c *controller) enqueue(obj any) {
 	var key string
 	var err error
 	if key, err = clientgocache.MetaNamespaceKeyFunc(obj); err != nil {
@@ -401,7 +418,7 @@ func (c *controller) enqueue(obj interface{}) {
 	c.startLock.Unlock()
 }
 
-func (c *controller) handleObject(obj interface{}) {
+func (c *controller) handleObject(obj any) {
 	if _, ok := obj.(metav1.Object); !ok {
 		tombstone, ok := obj.(clientgocache.DeletedFinalStateUnknown)
 		if !ok {

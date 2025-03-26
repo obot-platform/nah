@@ -11,6 +11,9 @@ import (
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/log"
 	"github.com/obot-platform/nah/pkg/merr"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
 	"golang.org/x/time/rate"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -25,6 +28,8 @@ const (
 	TriggerPrefix = "_t "
 	ReplayPrefix  = "_r "
 )
+
+var tracer = otel.Tracer("nah/router")
 
 type HandlerSet struct {
 	ctx      context.Context
@@ -56,7 +61,7 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 		scheme:  scheme,
 		backend: backend,
 		handlers: handlers{
-			handlers: map[schema.GroupVersionKind][]Handler{},
+			handlers: map[schema.GroupVersionKind][]handler{},
 		},
 		triggers: triggers{
 			matchers:  map[groupVersionKind]map[enqueueTarget]map[string]objectMatcher{},
@@ -124,7 +129,7 @@ func (t *triggerRegistry) Watch(obj runtime.Object, namespace, name string, sel 
 	return nil
 }
 
-func (m *HandlerSet) newRequestResponse(gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object, trigger bool) (Request, *response, error) {
+func (m *HandlerSet) newRequestResponse(ctx context.Context, gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object, trigger bool) (Request, *response, error) {
 	var (
 		obj = toObject(runtimeObject)
 	)
@@ -164,7 +169,7 @@ func (m *HandlerSet) newRequestResponse(gvk schema.GroupVersionKind, key string,
 				registry: triggerRegistry,
 			},
 		},
-		Ctx:       m.ctx,
+		Ctx:       ctx,
 		GVK:       gvk,
 		Object:    obj,
 		Namespace: ns,
@@ -175,12 +180,12 @@ func (m *HandlerSet) newRequestResponse(gvk schema.GroupVersionKind, key string,
 	return req, &resp, nil
 }
 
-func (m *HandlerSet) AddHandler(objType kclient.Object, handler Handler) {
+func (m *HandlerSet) AddHandler(name string, objType kclient.Object, handler Handler) {
 	gvk, err := m.backend.GVKForObject(objType, m.scheme)
 	if err != nil {
 		panic(fmt.Sprintf("scheme does not know gvk for %T", objType))
 	}
-	m.handlers.AddHandler(gvk, handler)
+	m.handlers.AddHandler(name, gvk, handler)
 }
 
 func (m *HandlerSet) WatchGVK(gvks ...schema.GroupVersionKind) error {
@@ -247,7 +252,10 @@ func (m *HandlerSet) forgetBackoff(gvk schema.GroupVersionKind, key string) {
 	delete(m.limiters, limiterKey{key: key, gvk: gvk})
 }
 
-func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object) (runtime.Object, error) {
+func (m *HandlerSet) onChange(ctx context.Context, gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object) (runtime.Object, error) {
+	ctx, span := tracer.Start(ctx, "onChange", trace.WithAttributes(attribute.String("key", key)), trace.WithAttributes(attribute.String("gvk", gvk.String())))
+	defer span.End()
+
 	fromTrigger := false
 	fromReplay := false
 	if strings.HasPrefix(key, TriggerPrefix) {
@@ -282,7 +290,7 @@ func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeOb
 	m.locker.Lock(lockKey)
 	defer func() { _ = m.locker.Unlock(lockKey) }()
 
-	err = m.backend.Get(m.ctx, kclient.ObjectKey{Name: name, Namespace: ns}, obj.(kclient.Object))
+	err = m.backend.Get(ctx, kclient.ObjectKey{Name: name, Namespace: ns}, obj.(kclient.Object))
 	if err == nil {
 		runtimeObject = obj
 	} else if !apierror.IsNotFound(err) {
@@ -293,7 +301,7 @@ func (m *HandlerSet) onChange(gvk schema.GroupVersionKind, key string, runtimeOb
 		m.forgetBackoff(gvk, key)
 	}
 
-	return m.handle(gvk, key, runtimeObject, fromTrigger)
+	return m.handle(ctx, gvk, key, runtimeObject, fromTrigger)
 }
 
 func (m *HandlerSet) handleError(req Request, resp Response, err error) error {
@@ -303,8 +311,8 @@ func (m *HandlerSet) handleError(req Request, resp Response, err error) error {
 	return err
 }
 
-func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedObject runtime.Object, trigger bool) (runtime.Object, error) {
-	req, resp, err := m.newRequestResponse(gvk, key, unmodifiedObject, trigger)
+func (m *HandlerSet) handle(ctx context.Context, gvk schema.GroupVersionKind, key string, unmodifiedObject runtime.Object, trigger bool) (runtime.Object, error) {
+	req, resp, err := m.newRequestResponse(ctx, gvk, key, unmodifiedObject, trigger)
 	if err != nil {
 		return nil, err
 	}
@@ -324,12 +332,14 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 		}
 	}
 
+	_, span := tracer.Start(ctx, "trigger", trace.WithAttributes(attribute.String("key", key), attribute.String("gvk", gvk.String()), attribute.Bool("unregister", unmodifiedObject == nil)))
 	if unmodifiedObject == nil {
 		// A nil object here means that the object was deleted, so unregister the triggers
 		m.triggers.UnregisterAndTrigger(req)
 	} else if !req.FromTrigger {
 		m.triggers.Trigger(req)
 	}
+	span.End()
 
 	if handles {
 		newObj, err := m.save.save(unmodifiedObject, req)
@@ -341,7 +351,7 @@ func (m *HandlerSet) handle(gvk schema.GroupVersionKind, key string, unmodifiedO
 		req.Object = newObj
 
 		if resp.delay > 0 {
-			if err := m.backend.Trigger(m.ctx, gvk, key, resp.delay); err != nil {
+			if err := m.backend.Trigger(ctx, gvk, key, resp.delay); err != nil {
 				return nil, err
 			}
 		}
