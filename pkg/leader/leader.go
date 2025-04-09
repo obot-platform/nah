@@ -6,16 +6,26 @@ import (
 	"os"
 	"time"
 
+	"github.com/obot-platform/nah/pkg/leader/locks"
 	"github.com/obot-platform/nah/pkg/log"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
+var defaultLeaderTTL = time.Minute
+
 const (
-	defaultLeaderTTL = time.Minute
-	devLeaderTTL     = time.Hour
+	devLeaderTTL = time.Hour
+
+	FileLockType = "file"
 )
+
+func init() {
+	if os.Getenv("NAH_DEV_MODE") != "" {
+		defaultLeaderTTL = devLeaderTTL
+	}
+}
 
 type OnLeader func(context.Context) error
 type OnNewLeader func(string)
@@ -27,16 +37,28 @@ type ElectionConfig struct {
 }
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
-	ttl := defaultLeaderTTL
-	if os.Getenv("NAH_DEV_MODE") != "" {
-		ttl = devLeaderTTL
-	}
 	return &ElectionConfig{
-		TTL:              ttl,
+		TTL:              defaultLeaderTTL,
 		Namespace:        namespace,
 		Name:             name,
 		ResourceLockType: resourcelock.LeasesResourceLock,
 		restCfg:          cfg,
+	}
+}
+
+func NewFileElectionConfig(fileName string) *ElectionConfig {
+	return &ElectionConfig{
+		TTL:              defaultLeaderTTL,
+		Name:             fileName,
+		ResourceLockType: FileLockType,
+	}
+}
+
+func NewFileElectionConfigWithTTL(fileName string, ttl time.Duration) *ElectionConfig {
+	return &ElectionConfig{
+		TTL:              ttl,
+		Name:             fileName,
+		ResourceLockType: FileLockType,
 	}
 }
 
@@ -68,16 +90,25 @@ func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader,
 }
 
 func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
-	rl, err := resourcelock.NewFromKubeconfig(
-		ec.ResourceLockType,
-		ec.Namespace,
-		ec.Name,
-		resourcelock.ResourceLockConfig{
-			Identity: id,
-		},
-		ec.restCfg,
-		ec.TTL/2,
+	var (
+		rl  resourcelock.Interface
+		err error
 	)
+	switch ec.ResourceLockType {
+	case FileLockType:
+		rl = locks.NewFile(id, ec.Name)
+	default:
+		rl, err = resourcelock.NewFromKubeconfig(
+			ec.ResourceLockType,
+			ec.Namespace,
+			ec.Name,
+			resourcelock.ResourceLockConfig{
+				Identity: id,
+			},
+			ec.restCfg,
+			ec.TTL/2,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("error creating leader lock for %s: %v", ec.Name, err)
 	}
