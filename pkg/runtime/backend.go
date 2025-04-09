@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	DefaultThreadiness = 5
+	DefaultThreadiness = 10
 	tracer             = otel.Tracer("nah/runtime")
 )
 

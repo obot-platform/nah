@@ -1,9 +1,11 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/log"
@@ -18,15 +20,25 @@ import (
 type triggers struct {
 	// matchers has the logical structure as map[groupVersionKind]map[enqueueTarget]map[string]objectMatcher but
 	// with sync.Map's
-	matchers  sync.Map
-	trigger   backend.Trigger
-	gvkLookup backend.Backend
-	scheme    *runtime.Scheme
-	watcher   watcher
+	matchers sync.Map
+	// toTrigger is a map of triggerKeys to last seen object. nil value means it this is a remove
+	toTrigger      map[triggerKey]kclient.Object
+	triggerLock    *sync.Cond
+	triggerRunning bool
+	trigger        backend.Trigger
+	gvkLookup      backend.Backend
+	scheme         *runtime.Scheme
+	watcher        watcher
 }
 
 type watcher interface {
 	WatchGVK(gvks ...schema.GroupVersionKind) error
+}
+
+type triggerKey struct {
+	name      string
+	namespace string
+	gvk       schema.GroupVersionKind
 }
 
 type enqueueTarget struct {
@@ -36,29 +48,6 @@ type enqueueTarget struct {
 
 func (et enqueueTarget) MarshalText() ([]byte, error) {
 	return []byte(et.gvk.String() + ": " + et.key), nil
-}
-
-func (m *triggers) invokeTriggers(req Request) {
-	matchers, _ := m.matchers.LoadOrStore(groupVersionKind{req.GVK}, &sync.Map{})
-
-	matchers.(*sync.Map).Range(func(key, value interface{}) bool {
-		et := key.(enqueueTarget)
-		if et.gvk == req.GVK &&
-			et.key == req.Key {
-			return true
-		}
-		value.(*sync.Map).Range(func(_, value any) bool {
-			mt := value.(objectMatcher)
-			if mt.Match(req.Namespace, req.Name, req.Object) {
-				log.Debugf("Triggering [%s] [%v] from [%s] [%v]", et.key, et.gvk, req.Key, req.GVK)
-				_ = m.trigger.Trigger(req.Ctx, et.gvk, et.key, 0)
-				return false
-			}
-			return true
-		})
-
-		return true
-	})
 }
 
 func (m *triggers) register(gvk schema.GroupVersionKind, key string, targetGVK schema.GroupVersionKind, mr objectMatcher) {
@@ -74,7 +63,13 @@ func (m *triggers) register(gvk schema.GroupVersionKind, key string, targetGVK s
 }
 
 func (m *triggers) Trigger(req Request) {
-	m.invokeTriggers(req)
+	m.triggerLock.L.Lock()
+	defer m.triggerLock.L.Unlock()
+	if m.toTrigger == nil {
+		m.toTrigger = map[triggerKey]kclient.Object{}
+	}
+	m.toTrigger[triggerKey{req.Name, req.Namespace, req.GVK}] = req.Object
+	m.kick()
 }
 
 func (m *triggers) Register(sourceGVK schema.GroupVersionKind, key string, obj runtime.Object, namespace, name string, selector labels.Selector, fields fields.Selector) (schema.GroupVersionKind, bool, error) {
@@ -100,31 +95,83 @@ func (m *triggers) Register(sourceGVK schema.GroupVersionKind, key string, obj r
 	return gvk, true, m.watcher.WatchGVK(gvk)
 }
 
+func (m *triggers) kick() {
+	if m.triggerRunning {
+		m.triggerLock.Broadcast()
+		return
+	}
+	m.triggerRunning = true
+	go func() {
+		m.triggerLock.L.Lock()
+		defer m.triggerLock.L.Unlock()
+		for {
+			if len(m.toTrigger) == 0 {
+				m.triggerLock.Wait()
+				continue
+			}
+
+			workingTrigger := m.toTrigger
+			m.toTrigger = nil
+
+			func() {
+				// We release the lock here to allow other goroutines to run while we are processing
+				m.triggerLock.L.Unlock()
+				defer m.triggerLock.L.Lock()
+
+				start := time.Now()
+				var checks int
+				defer func() {
+					duration := time.Since(start)
+					log.Debugf("Triggers took %s for %d keys and %d checks", duration, len(workingTrigger), checks)
+				}()
+
+				checks = m.process(context.Background(), workingTrigger)
+			}()
+		}
+	}()
+}
+
 // UnregisterAndTrigger will unregister all triggers for the object, both as source and target.
 // If a trigger source matches the object exactly, then the trigger will be invoked.
 func (m *triggers) UnregisterAndTrigger(req Request) {
-	deleteMatcher := objectMatcher{Namespace: req.Namespace, Name: req.Name}
-	deleteKey := deleteMatcher.String()
+	m.triggerLock.L.Lock()
+	defer m.triggerLock.L.Unlock()
 
+	if m.toTrigger == nil {
+		m.toTrigger = map[triggerKey]kclient.Object{}
+	}
+	m.toTrigger[triggerKey{req.Name, req.Namespace, req.GVK}] = nil
+	m.kick()
+}
+
+func toKey(namespace string, name string) string {
+	if namespace == "" {
+		return name
+	}
+	return namespace + "/" + name
+}
+
+func (m *triggers) process(ctx context.Context, pending map[triggerKey]kclient.Object) int {
+	var checks int
 	m.matchers.Range(func(key, value interface{}) bool {
 		targetGVK := key.(groupVersionKind)
 		matchers := value.(*sync.Map)
-
-		// Delete self
-		matchers.Delete(enqueueTarget{
-			key: req.Key,
-			gvk: req.GVK,
-		})
-
 		matchers.Range(func(key, value any) bool {
 			target := key.(enqueueTarget)
-			value.(*sync.Map).Delete(deleteKey)
 
 			value.(*sync.Map).Range(func(_, value any) bool {
+				checks++
 				mt := value.(objectMatcher)
-				if targetGVK.GroupVersionKind == req.GVK && mt.Match(req.Namespace, req.Name, req.Object) {
-					log.Debugf("Triggering [%s] [%v] from [%s] [%v] on delete", target.key, target.gvk, req.Key, req.GVK)
-					_ = m.trigger.Trigger(req.Ctx, target.gvk, target.key, 0)
+				if mt.Name == "" {
+					for key, obj := range pending {
+						if key.gvk == targetGVK.GroupVersionKind && mt.Match(key.namespace, key.name, obj) {
+							log.Debugf("Triggering [%s] [%v] from [%s] [%v] by selector", target.key, target.gvk, toKey(key.namespace, key.name), targetGVK.GroupVersionKind)
+							_ = m.trigger.Trigger(ctx, target.gvk, target.key, 0)
+						}
+					}
+				} else if _, ok := pending[triggerKey{mt.Name, mt.Namespace, targetGVK.GroupVersionKind}]; ok {
+					log.Debugf("Triggering [%s] [%v] from [%s] [%v] by direct match", target.key, target.gvk, toKey(mt.Namespace, mt.Name), targetGVK.GroupVersionKind)
+					_ = m.trigger.Trigger(ctx, target.gvk, target.key, 0)
 				}
 				return true
 			})
@@ -132,8 +179,39 @@ func (m *triggers) UnregisterAndTrigger(req Request) {
 			return true
 		})
 
+		// Do deletes after the fact to avoid race conditions
+		var deleteKeys []string
+
+		for key, obj := range pending {
+			if obj == nil {
+				matchers.Delete(enqueueTarget{
+					key: toKey(key.namespace, key.name),
+					gvk: key.gvk,
+				})
+				if key.gvk == targetGVK.GroupVersionKind {
+					deleteKey := objectMatcher{
+						Namespace: key.namespace,
+						Name:      key.name,
+					}
+					deleteKeys = append(deleteKeys, deleteKey.String())
+				}
+			}
+		}
+
+		if len(deleteKeys) > 0 {
+			matchers.Range(func(key, value any) bool {
+				for _, deleteKey := range deleteKeys {
+					value.(*sync.Map).Delete(deleteKey)
+				}
+
+				return true
+			})
+		}
+
 		return true
 	})
+
+	return checks
 }
 
 func (m *triggers) Dump(indent bool) ([]byte, error) {

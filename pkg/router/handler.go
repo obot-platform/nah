@@ -64,9 +64,10 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 			handlers: map[schema.GroupVersionKind][]handler{},
 		},
 		triggers: triggers{
-			trigger:   backend,
-			gvkLookup: backend,
-			scheme:    scheme,
+			trigger:     backend,
+			triggerLock: sync.NewCond(&sync.Mutex{}),
+			gvkLookup:   backend,
+			scheme:      scheme,
 		},
 		save: save{
 			cache:  backend,
