@@ -263,13 +263,19 @@ func (c *controller) runWorkers(ctx context.Context, workers int) {
 
 			for {
 				obj, shutdown := queue.Get()
-
 				if shutdown {
 					return
 				}
 
 				// Acquire from the semaphore
 				running <- struct{}{}
+
+				if queue.ShuttingDown() {
+					// If we acquired after the workers were shutdown,
+					// then drop this object and return instead of trying to add to the wait group, which will panic.
+					return
+				}
+
 				wait.Add(1)
 
 				go func() {
