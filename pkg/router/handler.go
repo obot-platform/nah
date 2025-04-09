@@ -64,7 +64,6 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 			handlers: map[schema.GroupVersionKind][]handler{},
 		},
 		triggers: triggers{
-			matchers:  map[groupVersionKind]map[enqueueTarget]map[string]objectMatcher{},
 			trigger:   backend,
 			gvkLookup: backend,
 			scheme:    scheme,
