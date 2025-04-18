@@ -13,19 +13,12 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
-var defaultLeaderTTL = time.Minute
-
 const (
-	devLeaderTTL = time.Hour
+	defaultLeaderTTL = time.Minute
+	devLeaderTTL     = time.Hour
 
 	FileLockType = "file"
 )
-
-func init() {
-	if os.Getenv("NAH_DEV_MODE") != "" {
-		defaultLeaderTTL = devLeaderTTL
-	}
-}
 
 type OnLeader func(context.Context) error
 type OnNewLeader func(string)
@@ -38,7 +31,7 @@ type ElectionConfig struct {
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
 	return &ElectionConfig{
-		TTL:              defaultLeaderTTL,
+		TTL:              defaultElectionTTL(),
 		Namespace:        namespace,
 		Name:             name,
 		ResourceLockType: resourcelock.LeasesResourceLock,
@@ -48,7 +41,7 @@ func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *Electio
 
 func NewFileElectionConfig(fileName string) *ElectionConfig {
 	return &ElectionConfig{
-		TTL:              defaultLeaderTTL,
+		TTL:              defaultElectionTTL(),
 		Name:             fileName,
 		ResourceLockType: FileLockType,
 	}
@@ -70,6 +63,13 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 		ResourceLockType: lockType,
 		restCfg:          cfg,
 	}
+}
+
+func defaultElectionTTL() time.Duration {
+	if os.Getenv("NAH_DEV_MODE") != "" {
+		return devLeaderTTL
+	}
+	return defaultLeaderTTL
 }
 
 func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
