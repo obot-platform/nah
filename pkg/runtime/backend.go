@@ -11,8 +11,8 @@ import (
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/fields"
 	"github.com/obot-platform/nah/pkg/router"
+	"github.com/obot-platform/nah/pkg/tracing"
 	"github.com/obot-platform/nah/pkg/untriggered"
-	"go.opentelemetry.io/otel"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kcache "k8s.io/client-go/tools/cache"
@@ -23,7 +23,6 @@ import (
 
 var (
 	DefaultThreadiness = 10
-	tracer             = otel.Tracer("nah/runtime")
 )
 
 func init() {
@@ -38,35 +37,37 @@ type Backend struct {
 
 	cacheFactory SharedControllerFactory
 	cache        cache.Cache
+	tracing      tracing.Tracing
 	startedLock  *sync.RWMutex
 	started      bool
 }
 
-func newBackend(cacheFactory SharedControllerFactory, client *cacheClient, cache cache.Cache) *Backend {
+func newBackend(cacheFactory SharedControllerFactory, client *cacheClient, cache cache.Cache, otelTracing tracing.Tracing) *Backend {
 	return &Backend{
 		cacheClient:  client,
 		cacheFactory: cacheFactory,
 		cache:        cache,
+		tracing:      otelTracing,
 		startedLock:  new(sync.RWMutex),
 	}
 }
 
 func (b *Backend) Start(ctx context.Context) error {
-	ctx, span := tracer.Start(ctx, "start")
+	ctx, span := b.tracing.Start(ctx, "start")
 	defer span.End()
 
 	return b.start(ctx, false)
 }
 
 func (b *Backend) Preload(ctx context.Context) error {
-	ctx, span := tracer.Start(ctx, "preload")
+	ctx, span := b.tracing.Start(ctx, "preload")
 	defer span.End()
 
 	return b.start(ctx, true)
 }
 
 func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
-	ctx, span := tracer.Start(ctx, "start")
+	ctx, span := b.tracing.Start(ctx, "start")
 	defer span.End()
 
 	b.startedLock.Lock()
@@ -144,7 +145,7 @@ func (b *Backend) addIndexer(ctx context.Context, gvk schema.GroupVersionKind) e
 }
 
 func (b *Backend) Watcher(ctx context.Context, gvk schema.GroupVersionKind, name string, cb backend.Callback) error {
-	ctx, span := tracer.Start(ctx, "watcher")
+	ctx, span := b.tracing.Start(ctx, "watcher")
 	defer span.End()
 
 	c, err := b.cacheFactory.ForKind(ctx, gvk)
@@ -180,14 +181,14 @@ func (b *Backend) GVKForObject(obj runtime.Object, scheme *runtime.Scheme) (sche
 }
 
 func (b *Backend) IndexField(ctx context.Context, obj kclient.Object, field string, extractValue kclient.IndexerFunc) error {
-	ctx, span := tracer.Start(ctx, "indexField")
+	ctx, span := b.tracing.StartLevel(ctx, tracing.LevelVerbose, "indexField")
 	defer span.End()
 
 	return b.cache.IndexField(ctx, obj, field, extractValue)
 }
 
 func (b *Backend) GetInformerForKind(ctx context.Context, gvk schema.GroupVersionKind) (kcache.SharedIndexInformer, error) {
-	ctx, span := tracer.Start(ctx, "getInformerForKind")
+	ctx, span := b.tracing.StartLevel(ctx, tracing.LevelVerbose, "getInformerForKind")
 	defer span.End()
 
 	i, err := b.cache.GetInformerForKind(ctx, gvk)

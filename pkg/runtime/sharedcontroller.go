@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/obot-platform/nah/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -41,6 +42,7 @@ type sharedController struct {
 	startError         error
 	client             kclient.Client
 	gvk                schema.GroupVersionKind
+	tracing            tracing.Tracing
 }
 
 func (s *sharedController) Cache() (cache.Cache, error) {
@@ -82,7 +84,7 @@ func (s *sharedController) initController() Controller {
 }
 
 func (s *sharedController) Start(ctx context.Context, workers int) error {
-	ctx, span := tracer.Start(ctx, "sharedControllerStart", trace.WithAttributes(
+	ctx, span := s.tracing.Start(ctx, "sharedControllerStart", trace.WithAttributes(
 		attribute.String("gvk", s.gvk.String()),
 		attribute.Int("workers", workers),
 	))

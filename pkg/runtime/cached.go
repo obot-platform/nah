@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/obot-platform/nah/pkg/tracing"
 	"github.com/obot-platform/nah/pkg/untriggered"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -34,6 +35,7 @@ type objectValue struct {
 type cacheClient struct {
 	uncached kclient.WithWatch
 	cached   kclient.Client
+	tracing  tracing.Tracing
 
 	recent     map[objectKey]objectValue
 	recentLock sync.Mutex
@@ -54,10 +56,11 @@ func newer(oldRV, newRV string) bool {
 	return oldI < newI
 }
 
-func newCacheClient(uncached kclient.WithWatch, cached kclient.Client) *cacheClient {
+func newCacheClient(uncached kclient.WithWatch, cached kclient.Client, otelTracing tracing.Tracing) *cacheClient {
 	return &cacheClient{
 		uncached: uncached,
 		cached:   cached,
+		tracing:  otelTracing,
 		recent:   map[objectKey]objectValue{},
 	}
 }
@@ -115,7 +118,7 @@ func (c *cacheClient) store(obj kclient.Object) {
 }
 
 func (c *cacheClient) Get(ctx context.Context, key kclient.ObjectKey, obj kclient.Object, opts ...kclient.GetOption) error {
-	ctx, span := tracer.Start(ctx, "cachedGet")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedGet")
 	defer span.End()
 
 	if u, ok := obj.(*untriggered.Holder); ok {
@@ -160,7 +163,7 @@ func (c *cacheClient) Get(ctx context.Context, key kclient.ObjectKey, obj kclien
 }
 
 func (c *cacheClient) List(ctx context.Context, list kclient.ObjectList, opts ...kclient.ListOption) error {
-	ctx, span := tracer.Start(ctx, "cachedList")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedList")
 	defer span.End()
 
 	if u, ok := list.(*untriggered.HolderList); ok {
@@ -173,7 +176,7 @@ func (c *cacheClient) List(ctx context.Context, list kclient.ObjectList, opts ..
 }
 
 func (c *cacheClient) Create(ctx context.Context, obj kclient.Object, opts ...kclient.CreateOption) error {
-	ctx, span := tracer.Start(ctx, "cachedCreate")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedCreate")
 	defer span.End()
 
 	if u, ok := obj.(*untriggered.Holder); ok {
@@ -191,7 +194,7 @@ func (c *cacheClient) Create(ctx context.Context, obj kclient.Object, opts ...kc
 }
 
 func (c *cacheClient) Delete(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteOption) error {
-	ctx, span := tracer.Start(ctx, "cachedDelete")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedDelete")
 	defer span.End()
 
 	if u, ok := obj.(*untriggered.Holder); ok {
@@ -209,7 +212,7 @@ func (c *cacheClient) Delete(ctx context.Context, obj kclient.Object, opts ...kc
 }
 
 func (c *cacheClient) Update(ctx context.Context, obj kclient.Object, opts ...kclient.UpdateOption) error {
-	ctx, span := tracer.Start(ctx, "cachedUpdate")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedUpdate")
 	defer span.End()
 
 	if u, ok := obj.(*untriggered.Holder); ok {
@@ -227,7 +230,7 @@ func (c *cacheClient) Update(ctx context.Context, obj kclient.Object, opts ...kc
 }
 
 func (c *cacheClient) Patch(ctx context.Context, obj kclient.Object, patch kclient.Patch, opts ...kclient.PatchOption) error {
-	ctx, span := tracer.Start(ctx, "cachedPatch")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedPatch")
 	defer span.End()
 
 	if u, ok := obj.(*untriggered.Holder); ok {
@@ -245,7 +248,7 @@ func (c *cacheClient) Patch(ctx context.Context, obj kclient.Object, patch kclie
 }
 
 func (c *cacheClient) DeleteAllOf(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteAllOfOption) error {
-	ctx, span := tracer.Start(ctx, "cachedDeleteAllOf")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedDeleteAllOf")
 	defer span.End()
 
 	if u, ok := obj.(*untriggered.Holder); ok {
@@ -267,7 +270,7 @@ func (c *cacheClient) SubResource(subResource string) kclient.SubResourceClient 
 }
 
 func (c *cacheClient) Watch(ctx context.Context, obj kclient.ObjectList, opts ...kclient.ListOption) (watch.Interface, error) {
-	ctx, span := tracer.Start(ctx, "cachedWatch")
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedWatch")
 	defer span.End()
 
 	return c.uncached.Watch(ctx, obj, opts...)
@@ -295,21 +298,21 @@ type subResourceClient struct {
 }
 
 func (s *subResourceClient) Get(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceGetOption) error {
-	ctx, span := tracer.Start(ctx, "subResource/get")
+	ctx, span := s.c.tracing.StartLevel(ctx, tracing.LevelVerbose, "subResource/get")
 	defer span.End()
 
 	return s.reader.Get(ctx, untriggered.Unwrap(obj).(kclient.Object), subResource, opts...)
 }
 
 func (s *subResourceClient) Create(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceCreateOption) error {
-	ctx, span := tracer.Start(ctx, "subResource/create")
+	ctx, span := s.c.tracing.StartLevel(ctx, tracing.LevelVerbose, "subResource/create")
 	defer span.End()
 
 	return s.writer.Create(ctx, untriggered.Unwrap(obj).(kclient.Object), subResource, opts...)
 }
 
 func (s *subResourceClient) Update(ctx context.Context, obj kclient.Object, opts ...kclient.SubResourceUpdateOption) error {
-	ctx, span := tracer.Start(ctx, "subResource/update")
+	ctx, span := s.c.tracing.StartLevel(ctx, tracing.LevelVerbose, "subResource/update")
 	defer span.End()
 
 	err := s.writer.Update(ctx, untriggered.Unwrap(obj).(kclient.Object), opts...)
@@ -321,7 +324,7 @@ func (s *subResourceClient) Update(ctx context.Context, obj kclient.Object, opts
 }
 
 func (s *subResourceClient) Patch(ctx context.Context, obj kclient.Object, patch kclient.Patch, opts ...kclient.SubResourcePatchOption) error {
-	ctx, span := tracer.Start(ctx, "subResource/patch")
+	ctx, span := s.c.tracing.StartLevel(ctx, tracing.LevelVerbose, "subResource/patch")
 	defer span.End()
 
 	err := s.writer.Patch(ctx, untriggered.Unwrap(obj).(kclient.Object), patch, opts...)

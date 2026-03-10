@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/obot-platform/nah/pkg/log"
+	"github.com/obot-platform/nah/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -62,6 +63,7 @@ type controller struct {
 	obj          runtime.Object
 	cache        cache.Cache
 	splitter     WorkerQueueSplitter
+	tracing      tracing.Tracing
 }
 
 type startKey struct {
@@ -70,6 +72,7 @@ type startKey struct {
 }
 
 type Options struct {
+	Tracing       tracing.Tracing
 	RateLimiter   workqueue.TypedRateLimiter[any]
 	QueueSplitter WorkerQueueSplitter
 }
@@ -111,6 +114,7 @@ func New(ctx context.Context, gvk schema.GroupVersionKind, scheme *runtime.Schem
 		rateLimiter: opts.RateLimiter,
 		informer:    informer,
 		splitter:    opts.QueueSplitter,
+		tracing:     opts.Tracing,
 	}
 
 	return controller, nil
@@ -128,6 +132,9 @@ func applyDefaultOptions(opts *Options) *Options {
 	var newOpts Options
 	if opts != nil {
 		newOpts = *opts
+	}
+	if newOpts.Tracing == (tracing.Tracing{}) {
+		newOpts.Tracing = tracing.New("nah/runtime", "")
 	}
 	if newOpts.RateLimiter == nil {
 		newOpts.RateLimiter = workqueue.NewTypedMaxOfRateLimiter(
@@ -187,7 +194,7 @@ func (c *controller) run(ctx context.Context, workers int) {
 }
 
 func (c *controller) Start(ctx context.Context, workers int) error {
-	ctx, span := tracer.Start(ctx, "controllerStart", trace.WithAttributes(
+	ctx, span := c.tracing.Start(ctx, "controllerStart", trace.WithAttributes(
 		attribute.String("gvk", c.gvk.String()),
 		attribute.Int("workers", workers),
 	))
@@ -303,10 +310,16 @@ func (c *controller) runWorkers(ctx context.Context, workers int) {
 
 func (c *controller) processSingleItem(ctx context.Context, queue workqueue.TypedRateLimitingInterface[any], obj any) error {
 	// Create a new root span for processing items.
-	ctx, span := tracer.Start(ctx, "processSingleItem", trace.WithNewRoot(), trace.WithAttributes(
-		attribute.String("gvk", c.gvk.String()),
-		attribute.String("key", fmt.Sprintf("%v", obj)),
-	))
+	opts := []trace.SpanStartOption{
+		trace.WithAttributes(
+			attribute.String("gvk", c.gvk.String()),
+			attribute.String("key", fmt.Sprintf("%v", obj)),
+		),
+	}
+	if c.tracing.Level() == tracing.LevelVerbose {
+		opts = append(opts, trace.WithNewRoot())
+	}
+	ctx, span := c.tracing.Start(ctx, "processSingleItem", opts...)
 	defer span.End()
 
 	var (
