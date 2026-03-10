@@ -41,14 +41,14 @@ func NewRuntimeForNamespace(cfg *rest.Config, namespace string, scheme *runtime.
 }
 
 func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) {
-	instrumentation := tracing.NewInstrumentation("nah/runtime", "")
+	otelTracing := tracing.New("nah/runtime", "")
 	uncachedClient, cachedClient, theCache, err := getClients(cfg, scheme)
 	if err != nil {
 		return nil, err
 	}
 
 	factory := NewSharedControllerFactory(uncachedClient, theCache, &SharedControllerFactoryOptions{
-		Instrumentation:   instrumentation,
+		Tracing:           otelTracing,
 		KindWorkers:       cfg.GVKThreadiness,
 		KindQueueSplitter: cfg.GVKQueueSplitters,
 		// In nah this is only invoked when a key fails to process
@@ -59,7 +59,7 @@ func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) 
 	})
 
 	return &Runtime{
-		Backend: newBackend(factory, newCacheClient(uncachedClient, cachedClient, instrumentation), theCache, instrumentation),
+		Backend: newBackend(factory, newCacheClient(uncachedClient, cachedClient, otelTracing), theCache, otelTracing),
 	}, nil
 }
 

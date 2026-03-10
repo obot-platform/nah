@@ -63,7 +63,7 @@ type controller struct {
 	obj          runtime.Object
 	cache        cache.Cache
 	splitter     WorkerQueueSplitter
-	tracing      tracing.Instrumentation
+	tracing      tracing.Tracing
 }
 
 type startKey struct {
@@ -72,9 +72,9 @@ type startKey struct {
 }
 
 type Options struct {
-	Instrumentation tracing.Instrumentation
-	RateLimiter     workqueue.TypedRateLimiter[any]
-	QueueSplitter   WorkerQueueSplitter
+	Tracing       tracing.Tracing
+	RateLimiter   workqueue.TypedRateLimiter[any]
+	QueueSplitter WorkerQueueSplitter
 }
 
 type WorkerQueueSplitter interface {
@@ -114,7 +114,7 @@ func New(ctx context.Context, gvk schema.GroupVersionKind, scheme *runtime.Schem
 		rateLimiter: opts.RateLimiter,
 		informer:    informer,
 		splitter:    opts.QueueSplitter,
-		tracing:     opts.Instrumentation,
+		tracing:     opts.Tracing,
 	}
 
 	return controller, nil
@@ -133,8 +133,8 @@ func applyDefaultOptions(opts *Options) *Options {
 	if opts != nil {
 		newOpts = *opts
 	}
-	if newOpts.Instrumentation == (tracing.Instrumentation{}) {
-		newOpts.Instrumentation = tracing.NewInstrumentation("nah/runtime", tracing.DefaultLevel)
+	if newOpts.Tracing == (tracing.Tracing{}) {
+		newOpts.Tracing = tracing.New("nah/runtime", "")
 	}
 	if newOpts.RateLimiter == nil {
 		newOpts.RateLimiter = workqueue.NewTypedMaxOfRateLimiter(

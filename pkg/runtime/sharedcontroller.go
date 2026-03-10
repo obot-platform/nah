@@ -42,7 +42,7 @@ type sharedController struct {
 	startError         error
 	client             kclient.Client
 	gvk                schema.GroupVersionKind
-	tracing            tracing.Instrumentation
+	tracing            tracing.Tracing
 }
 
 func (s *sharedController) Cache() (cache.Cache, error) {

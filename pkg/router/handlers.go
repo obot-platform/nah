@@ -11,9 +11,9 @@ import (
 )
 
 type handlers struct {
-	lock            sync.RWMutex
-	handlers        map[schema.GroupVersionKind][]handler
-	instrumentation tracing.Instrumentation
+	lock     sync.RWMutex
+	handlers map[schema.GroupVersionKind][]handler
+	tracing  tracing.Tracing
 }
 
 func (h *handlers) GVKs() (result []schema.GroupVersionKind) {
@@ -27,7 +27,7 @@ func (h *handlers) AddHandler(name string, gvk schema.GroupVersionKind, hd Handl
 	h.lock.Lock()
 	defer h.lock.Unlock()
 
-	h.handlers[gvk] = append(h.handlers[gvk], handler{name: name, h: hd, instrumentation: h.instrumentation})
+	h.handlers[gvk] = append(h.handlers[gvk], handler{name: name, h: hd, tracing: h.tracing})
 }
 
 func (h *handlers) Handles(req Request) bool {
@@ -54,13 +54,13 @@ func (h *handlers) Handle(req Request, resp *response) error {
 }
 
 type handler struct {
-	name            string
-	h               Handler
-	instrumentation tracing.Instrumentation
+	name    string
+	h       Handler
+	tracing tracing.Tracing
 }
 
 func (h *handler) handle(req Request, resp *response) error {
-	ctx, span := h.instrumentation.Start(req.Ctx, "handlerSetHandle", trace.WithAttributes(
+	ctx, span := h.tracing.Start(req.Ctx, "handlerSetHandle", trace.WithAttributes(
 		attribute.String("gvk", req.GVK.String()),
 		attribute.String("namespace", req.Namespace),
 		attribute.String("name", req.Name),

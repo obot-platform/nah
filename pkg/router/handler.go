@@ -34,7 +34,7 @@ type HandlerSet struct {
 	name     string
 	scheme   *runtime.Scheme
 	backend  backend.Backend
-	tracing  tracing.Instrumentation
+	tracing  tracing.Tracing
 	handlers handlers
 	triggers triggers
 	save     save
@@ -55,15 +55,15 @@ type limiterKey struct {
 }
 
 func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend) *HandlerSet {
-	instrumentation := tracing.NewInstrumentation("nah/router", "")
+	otelTracing := tracing.New("nah/router", "")
 	hs := &HandlerSet{
 		name:    name,
 		scheme:  scheme,
 		backend: backend,
-		tracing: instrumentation,
+		tracing: otelTracing,
 		handlers: handlers{
-			handlers:        map[schema.GroupVersionKind][]handler{},
-			instrumentation: instrumentation,
+			handlers: map[schema.GroupVersionKind][]handler{},
+			tracing:  otelTracing,
 		},
 		triggers: triggers{
 			trigger:     backend,
@@ -74,7 +74,7 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 		save: save{
 			cache:   backend,
 			client:  backend,
-			tracing: instrumentation,
+			tracing: otelTracing,
 		},
 		watching: map[schema.GroupVersionKind]bool{},
 	}

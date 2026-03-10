@@ -15,7 +15,7 @@ import (
 type save struct {
 	cache   backend.CacheFactory
 	client  kclient.Client
-	tracing tracing.Instrumentation
+	tracing tracing.Tracing
 }
 
 func (s *save) save(unmodified runtime.Object, req Request) (kclient.Object, error) {

@@ -25,7 +25,7 @@ type SharedControllerFactoryOptions struct {
 	KindRateLimiter   map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
 	KindWorkers       map[schema.GroupVersionKind]int
 	KindQueueSplitter map[schema.GroupVersionKind]WorkerQueueSplitter
-	Instrumentation   tracing.Instrumentation
+	Tracing           tracing.Tracing
 }
 
 type sharedControllerFactory struct {
@@ -42,7 +42,7 @@ type sharedControllerFactory struct {
 	kindRateLimiter   map[schema.GroupVersionKind]workqueue.TypedRateLimiter[any]
 	kindWorkers       map[schema.GroupVersionKind]int
 	kindQueueSplitter map[schema.GroupVersionKind]WorkerQueueSplitter
-	instrumentation   tracing.Instrumentation
+	tracing           tracing.Tracing
 }
 
 func NewSharedControllerFactory(c kclient.Client, cache cache.Cache, opts *SharedControllerFactoryOptions) SharedControllerFactory {
@@ -56,7 +56,7 @@ func NewSharedControllerFactory(c kclient.Client, cache cache.Cache, opts *Share
 		rateLimiter:       opts.DefaultRateLimiter,
 		kindRateLimiter:   opts.KindRateLimiter,
 		kindQueueSplitter: opts.KindQueueSplitter,
-		instrumentation:   opts.Instrumentation,
+		tracing:           opts.Tracing,
 	}
 }
 
@@ -68,27 +68,27 @@ func applyDefaultSharedOptions(opts *SharedControllerFactoryOptions) *SharedCont
 	if newOpts.DefaultWorkers == 0 {
 		newOpts.DefaultWorkers = DefaultThreadiness
 	}
-	if newOpts.Instrumentation == (tracing.Instrumentation{}) {
-		newOpts.Instrumentation = tracing.NewInstrumentation("nah/runtime", tracing.DefaultLevel)
+	if newOpts.Tracing == (tracing.Tracing{}) {
+		newOpts.Tracing = tracing.New("nah/runtime", "")
 	}
 	return &newOpts
 }
 func (s *sharedControllerFactory) Preload(ctx context.Context) error {
-	ctx, span := s.instrumentation.Start(ctx, "sharedControllerFactoryPreload")
+	ctx, span := s.tracing.Start(ctx, "sharedControllerFactoryPreload")
 	defer span.End()
 
 	return s.loadAndStart(ctx, false)
 }
 
 func (s *sharedControllerFactory) Start(ctx context.Context) error {
-	ctx, span := s.instrumentation.Start(ctx, "sharedControllerFactoryStart")
+	ctx, span := s.tracing.Start(ctx, "sharedControllerFactoryStart")
 	defer span.End()
 
 	return s.loadAndStart(ctx, true)
 }
 
 func (s *sharedControllerFactory) loadAndStart(ctx context.Context, start bool) error {
-	ctx, span := s.instrumentation.Start(ctx, "sharedControllerFactoryLoadAndStart")
+	ctx, span := s.tracing.Start(ctx, "sharedControllerFactoryLoadAndStart")
 	defer span.End()
 
 	s.controllerLock.Lock()
@@ -157,15 +157,15 @@ func (s *sharedControllerFactory) ForKind(ctx context.Context, gvk schema.GroupV
 			}
 
 			return New(ctx, gvk, s.client.Scheme(), s.cache, handler, &Options{
-				Instrumentation: s.instrumentation,
-				RateLimiter:     rateLimiter,
-				QueueSplitter:   s.kindQueueSplitter[gvk],
+				Tracing:       s.tracing,
+				RateLimiter:   rateLimiter,
+				QueueSplitter: s.kindQueueSplitter[gvk],
 			})
 		},
 		handler: handler,
 		client:  s.client,
 		gvk:     gvk,
-		tracing: s.instrumentation,
+		tracing: s.tracing,
 	}
 
 	s.controllers[gvk] = controllerResult

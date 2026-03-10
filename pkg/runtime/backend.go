@@ -37,17 +37,17 @@ type Backend struct {
 
 	cacheFactory SharedControllerFactory
 	cache        cache.Cache
-	tracing      tracing.Instrumentation
+	tracing      tracing.Tracing
 	startedLock  *sync.RWMutex
 	started      bool
 }
 
-func newBackend(cacheFactory SharedControllerFactory, client *cacheClient, cache cache.Cache, instrumentation tracing.Instrumentation) *Backend {
+func newBackend(cacheFactory SharedControllerFactory, client *cacheClient, cache cache.Cache, otelTracing tracing.Tracing) *Backend {
 	return &Backend{
 		cacheClient:  client,
 		cacheFactory: cacheFactory,
 		cache:        cache,
-		tracing:      instrumentation,
+		tracing:      otelTracing,
 		startedLock:  new(sync.RWMutex),
 	}
 }

@@ -35,7 +35,7 @@ type objectValue struct {
 type cacheClient struct {
 	uncached kclient.WithWatch
 	cached   kclient.Client
-	tracing  tracing.Instrumentation
+	tracing  tracing.Tracing
 
 	recent     map[objectKey]objectValue
 	recentLock sync.Mutex
@@ -56,11 +56,11 @@ func newer(oldRV, newRV string) bool {
 	return oldI < newI
 }
 
-func newCacheClient(uncached kclient.WithWatch, cached kclient.Client, instrumentation tracing.Instrumentation) *cacheClient {
+func newCacheClient(uncached kclient.WithWatch, cached kclient.Client, otelTracing tracing.Tracing) *cacheClient {
 	return &cacheClient{
 		uncached: uncached,
 		cached:   cached,
-		tracing:  instrumentation,
+		tracing:  otelTracing,
 		recent:   map[objectKey]objectValue{},
 	}
 }
