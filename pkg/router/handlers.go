@@ -4,14 +4,16 @@ import (
 	"sync"
 
 	"github.com/obot-platform/nah/pkg/merr"
+	"github.com/obot-platform/nah/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type handlers struct {
-	lock     sync.RWMutex
-	handlers map[schema.GroupVersionKind][]handler
+	lock            sync.RWMutex
+	handlers        map[schema.GroupVersionKind][]handler
+	instrumentation tracing.Instrumentation
 }
 
 func (h *handlers) GVKs() (result []schema.GroupVersionKind) {
@@ -25,7 +27,7 @@ func (h *handlers) AddHandler(name string, gvk schema.GroupVersionKind, hd Handl
 	h.lock.Lock()
 	defer h.lock.Unlock()
 
-	h.handlers[gvk] = append(h.handlers[gvk], handler{name: name, h: hd})
+	h.handlers[gvk] = append(h.handlers[gvk], handler{name: name, h: hd, instrumentation: h.instrumentation})
 }
 
 func (h *handlers) Handles(req Request) bool {
@@ -52,12 +54,13 @@ func (h *handlers) Handle(req Request, resp *response) error {
 }
 
 type handler struct {
-	name string
-	h    Handler
+	name            string
+	h               Handler
+	instrumentation tracing.Instrumentation
 }
 
 func (h *handler) handle(req Request, resp *response) error {
-	ctx, span := tracer.Start(req.Ctx, "handlerSetHandle", trace.WithAttributes(
+	ctx, span := h.instrumentation.Start(req.Ctx, "handlerSetHandle", trace.WithAttributes(
 		attribute.String("gvk", req.GVK.String()),
 		attribute.String("namespace", req.Namespace),
 		attribute.String("name", req.Name),

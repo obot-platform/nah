@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/obot-platform/nah/pkg/backend"
+	"github.com/obot-platform/nah/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -12,12 +13,13 @@ import (
 )
 
 type save struct {
-	cache  backend.CacheFactory
-	client kclient.Client
+	cache   backend.CacheFactory
+	client  kclient.Client
+	tracing tracing.Instrumentation
 }
 
 func (s *save) save(unmodified runtime.Object, req Request) (kclient.Object, error) {
-	ctx, span := tracer.Start(req.Ctx, "save", trace.WithAttributes(attribute.String("key", req.Key), attribute.String("gvk", req.GVK.String())))
+	ctx, span := s.tracing.StartLevel(req.Ctx, tracing.LevelVerbose, "save", trace.WithAttributes(attribute.String("key", req.Key), attribute.String("gvk", req.GVK.String())))
 	defer span.End()
 
 	newObj := req.Object

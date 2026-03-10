@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/obot-platform/nah/pkg/mapper"
+	"github.com/obot-platform/nah/pkg/tracing"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -40,12 +41,14 @@ func NewRuntimeForNamespace(cfg *rest.Config, namespace string, scheme *runtime.
 }
 
 func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) {
+	instrumentation := tracing.NewInstrumentation("nah/runtime", "")
 	uncachedClient, cachedClient, theCache, err := getClients(cfg, scheme)
 	if err != nil {
 		return nil, err
 	}
 
 	factory := NewSharedControllerFactory(uncachedClient, theCache, &SharedControllerFactoryOptions{
+		Instrumentation:   instrumentation,
 		KindWorkers:       cfg.GVKThreadiness,
 		KindQueueSplitter: cfg.GVKQueueSplitters,
 		// In nah this is only invoked when a key fails to process
@@ -56,7 +59,7 @@ func NewRuntimeWithConfig(cfg Config, scheme *runtime.Scheme) (*Runtime, error) 
 	})
 
 	return &Runtime{
-		Backend: newBackend(factory, newCacheClient(uncachedClient, cachedClient), theCache),
+		Backend: newBackend(factory, newCacheClient(uncachedClient, cachedClient, instrumentation), theCache, instrumentation),
 	}, nil
 }
 

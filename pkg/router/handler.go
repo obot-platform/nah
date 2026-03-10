@@ -11,7 +11,7 @@ import (
 	"github.com/obot-platform/nah/pkg/backend"
 	"github.com/obot-platform/nah/pkg/log"
 	"github.com/obot-platform/nah/pkg/merr"
-	"go.opentelemetry.io/otel"
+	"github.com/obot-platform/nah/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/exp/maps"
@@ -29,13 +29,12 @@ const (
 	ReplayPrefix  = "_r "
 )
 
-var tracer = otel.Tracer("nah/router")
-
 type HandlerSet struct {
 	ctx      context.Context
 	name     string
 	scheme   *runtime.Scheme
 	backend  backend.Backend
+	tracing  tracing.Instrumentation
 	handlers handlers
 	triggers triggers
 	save     save
@@ -56,12 +55,15 @@ type limiterKey struct {
 }
 
 func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend) *HandlerSet {
+	instrumentation := tracing.NewInstrumentation("nah/router", "")
 	hs := &HandlerSet{
 		name:    name,
 		scheme:  scheme,
 		backend: backend,
+		tracing: instrumentation,
 		handlers: handlers{
-			handlers: map[schema.GroupVersionKind][]handler{},
+			handlers:        map[schema.GroupVersionKind][]handler{},
+			instrumentation: instrumentation,
 		},
 		triggers: triggers{
 			trigger:     backend,
@@ -70,8 +72,9 @@ func NewHandlerSet(name string, scheme *runtime.Scheme, backend backend.Backend)
 			scheme:      scheme,
 		},
 		save: save{
-			cache:  backend,
-			client: backend,
+			cache:   backend,
+			client:  backend,
+			tracing: instrumentation,
 		},
 		watching: map[schema.GroupVersionKind]bool{},
 	}
@@ -253,7 +256,7 @@ func (m *HandlerSet) forgetBackoff(gvk schema.GroupVersionKind, key string) {
 }
 
 func (m *HandlerSet) onChange(ctx context.Context, gvk schema.GroupVersionKind, key string, runtimeObject runtime.Object) (runtime.Object, error) {
-	ctx, span := tracer.Start(ctx, "onChange", trace.WithAttributes(attribute.String("key", key)), trace.WithAttributes(attribute.String("gvk", gvk.String())))
+	ctx, span := m.tracing.Start(ctx, "onChange", trace.WithAttributes(attribute.String("key", key)), trace.WithAttributes(attribute.String("gvk", gvk.String())))
 	defer span.End()
 
 	fromTrigger := false
@@ -332,7 +335,7 @@ func (m *HandlerSet) handle(ctx context.Context, gvk schema.GroupVersionKind, ke
 		}
 	}
 
-	_, span := tracer.Start(ctx, "trigger", trace.WithAttributes(attribute.String("key", key), attribute.String("gvk", gvk.String()), attribute.Bool("unregister", unmodifiedObject == nil)))
+	_, span := m.tracing.StartLevel(ctx, tracing.LevelVerbose, "trigger", trace.WithAttributes(attribute.String("key", key), attribute.String("gvk", gvk.String()), attribute.Bool("unregister", unmodifiedObject == nil)))
 	if unmodifiedObject == nil {
 		// A nil object here means that the object was deleted, so unregister the triggers
 		m.triggers.UnregisterAndTrigger(req)
