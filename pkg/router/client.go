@@ -42,6 +42,15 @@ type writer struct {
 	registry TriggerRegistry
 }
 
+func (w *writer) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.ApplyOption) error {
+	if o, ok := obj.(kclient.Object); ok {
+		if err := w.registry.Watch(o, o.GetNamespace(), o.GetName(), nil, nil); err != nil {
+			return err
+		}
+	}
+	return w.client.Apply(ctx, obj, opts...)
+}
+
 func (w *writer) DeleteAllOf(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteAllOfOption) error {
 	delOpts := &kclient.DeleteAllOfOptions{}
 	for _, opt := range opts {

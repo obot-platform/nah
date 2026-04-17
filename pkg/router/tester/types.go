@@ -180,6 +180,11 @@ func (r *Response) Objects(obj ...kclient.Object) {
 	r.Collected = append(r.Collected, obj...)
 }
 
+func (c *Client) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.ApplyOption) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *Client) Delete(ctx context.Context, obj kclient.Object, opts ...kclient.DeleteOption) error {
 	//TODO implement me
 	panic("implement me")
