@@ -283,6 +283,20 @@ func (c *cacheClient) Status() kclient.StatusWriter {
 	}
 }
 
+func (c *cacheClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.ApplyOption) error {
+	ctx, span := c.tracing.StartLevel(ctx, tracing.LevelVerbose, "cachedApply")
+	defer span.End()
+
+	err := c.cached.Apply(ctx, obj, opts...)
+	if err != nil {
+		return err
+	}
+	if o, ok := obj.(kclient.Object); ok {
+		c.store(o)
+	}
+	return nil
+}
+
 func (c *cacheClient) Scheme() *runtime.Scheme {
 	return c.cached.Scheme()
 }
