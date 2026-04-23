@@ -8,6 +8,7 @@ import (
 
 	"github.com/obot-platform/nah/pkg/leader/locks"
 	"github.com/obot-platform/nah/pkg/log"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -105,7 +106,7 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 			resourcelock.ResourceLockConfig{
 				Identity: id,
 			},
-			ec.restCfg,
+			jsonClientConfig(ec.restCfg),
 			ec.TTL/2,
 		)
 	}
@@ -147,4 +148,11 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 		le.Run(ctx)
 	}()
 	return nil
+}
+
+func jsonClientConfig(cfg *rest.Config) *rest.Config {
+	cfg = rest.CopyConfig(cfg)
+	cfg.AcceptContentTypes = runtime.ContentTypeJSON
+	cfg.ContentType = runtime.ContentTypeJSON
+	return cfg
 }
