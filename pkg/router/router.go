@@ -43,7 +43,7 @@ func New(handlerSet *HandlerSet, electionConfig *leader.ElectionConfig, healthzP
 		setPort(healthzPort)
 	}
 
-	r.RouteBuilder.router = r
+	r.router = r
 	return r
 }
 

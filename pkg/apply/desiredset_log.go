@@ -37,7 +37,7 @@ func (a *apply) ownerLogKey() string {
 		result.WriteString("[")
 		result.WriteString(logKey(a.owner))
 		result.WriteString("] [")
-		result.WriteString(fmt.Sprint(a.ownerGVK))
+		fmt.Fprint(&result, a.ownerGVK)
 		result.WriteString("]")
 	}
 	if a.ownerSubContext != "" {

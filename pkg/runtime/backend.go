@@ -91,7 +91,7 @@ func (b *Backend) start(ctx context.Context, preloadOnly bool) (err error) {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 	if !b.started {
-		b.cacheClient.startPurge(ctx)
+		b.startPurge(ctx)
 	}
 
 	return nil

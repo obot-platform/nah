@@ -1,7 +1,8 @@
 package router
 
 import (
-	"k8s.io/utils/strings/slices"
+	"slices"
+
 	kclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
