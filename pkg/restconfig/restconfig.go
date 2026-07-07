@@ -51,10 +51,7 @@ func FromURLTokenAndScheme(serverURL, token string, scheme *runtime.Scheme) (*re
 	if err != nil {
 		return nil, err
 	}
-	insecure := false
-	if u.Scheme == "https" && u.Host == "localhost" {
-		insecure = true
-	}
+	insecure := u.Scheme == "https" && u.Host == "localhost"
 
 	cfg := &rest.Config{
 		Host: serverURL,

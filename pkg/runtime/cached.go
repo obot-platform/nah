@@ -348,3 +348,17 @@ func (s *subResourceClient) Patch(ctx context.Context, obj kclient.Object, patch
 	s.c.store(obj)
 	return nil
 }
+
+func (s *subResourceClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.SubResourceApplyOption) error {
+	ctx, span := s.c.tracing.StartLevel(ctx, tracing.LevelVerbose, "subResource/apply")
+	defer span.End()
+
+	err := s.writer.Apply(ctx, obj, opts...)
+	if err != nil {
+		return err
+	}
+	if o, ok := obj.(kclient.Object); ok {
+		s.c.store(o)
+	}
+	return nil
+}

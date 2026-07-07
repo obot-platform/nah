@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
+	kcache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,6 +29,14 @@ type Config struct {
 	ByObject          map[client.Object]cache.ByObject
 	GVKThreadiness    map[schema.GroupVersionKind]int
 	GVKQueueSplitters map[schema.GroupVersionKind]WorkerQueueSplitter
+}
+
+type unsupportedWatchListSemanticsListerWatcher struct {
+	kcache.ListerWatcher
+}
+
+func (unsupportedWatchListSemanticsListerWatcher) IsWatchListSemanticsUnSupported() bool {
+	return true
 }
 
 func NewRuntime(cfg *rest.Config, scheme *runtime.Scheme) (*Runtime, error) {
@@ -99,6 +108,9 @@ func getClients(cfg Config, scheme *runtime.Scheme) (uncachedClient client.WithW
 		DefaultFieldSelector: cfg.FieldSelector,
 		DefaultLabelSelector: cfg.LabelSelector,
 		ByObject:             cfg.ByObject,
+		NewInformer: func(lw kcache.ListerWatcher, obj runtime.Object, resyncPeriod time.Duration, indexers kcache.Indexers) kcache.SharedIndexInformer {
+			return kcache.NewSharedIndexInformer(unsupportedWatchListSemanticsListerWatcher{ListerWatcher: lw}, obj, resyncPeriod, indexers)
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, err

@@ -138,6 +138,15 @@ func (s *subResourceClient) Patch(ctx context.Context, obj kclient.Object, patch
 	return s.writer.Patch(ctx, obj, patch, opts...)
 }
 
+func (s *subResourceClient) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...kclient.SubResourceApplyOption) error {
+	if o, ok := obj.(kclient.Object); ok {
+		if err := s.registry.Watch(o, o.GetNamespace(), o.GetName(), nil, nil); err != nil {
+			return err
+		}
+	}
+	return s.writer.Apply(ctx, obj, opts...)
+}
+
 func (s *subResourceClient) Create(ctx context.Context, obj kclient.Object, subResource kclient.Object, opts ...kclient.SubResourceCreateOption) error {
 	if err := s.registry.Watch(obj, obj.GetNamespace(), obj.GetName(), nil, nil); err != nil {
 		return err
