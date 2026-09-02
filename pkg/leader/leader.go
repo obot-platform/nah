@@ -31,6 +31,9 @@ type ElectionConfig struct {
 	Name, Namespace, ResourceLockType string
 	restCfg                           *rest.Config
 	sqlDB                             *sql.DB
+	// bridgeLegacyLease makes a SQL lock defer to the Lease of the same name and
+	// namespace, reached through restCfg, until the SQL lock's first row exists.
+	bridgeLegacyLease bool
 }
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
@@ -83,6 +86,19 @@ func NewSQLElectionConfig(name string, db *sql.DB) *ElectionConfig {
 	}
 }
 
+// WithLegacyLeaseLock makes a SQL election defer to the Lease that earlier versions
+// of the program held for the same name, in namespace, reached through cfg, until
+// the first row of the SQL lock exists. Use it for the release that moves an
+// election from the Lease lock to the SQL lock, so that a rolling update in which
+// old and new replicas overlap still has one leader. See locks.WithLegacyLock for
+// the rules. Drop the call once every replica runs the SQL lock.
+func (ec *ElectionConfig) WithLegacyLeaseLock(namespace string, cfg *rest.Config) *ElectionConfig {
+	ec.Namespace = namespace
+	ec.restCfg = cfg
+	ec.bridgeLegacyLease = true
+	return ec
+}
+
 // resourceLock builds the lock the elector will run against, chosen by
 // ResourceLockType. id is the identity the elector will hold the lock under.
 func (ec *ElectionConfig) resourceLock(ctx context.Context, id string) (resourcelock.Interface, error) {
@@ -90,19 +106,37 @@ func (ec *ElectionConfig) resourceLock(ctx context.Context, id string) (resource
 	case FileLockType:
 		return locks.NewFile(id, ec.Name), nil
 	case SQLLockType:
-		return locks.NewSQL(ctx, ec.sqlDB, ec.Name, id)
+		var opts []locks.SQLOption
+		if ec.bridgeLegacyLease {
+			legacy, err := ec.leaseLock(id)
+			if err != nil {
+				return nil, fmt.Errorf("building the legacy lease lock: %w", err)
+			}
+			opts = append(opts, locks.WithLegacyLock(legacy))
+		}
+		return locks.NewSQL(ctx, ec.sqlDB, ec.Name, id, opts...)
 	default:
-		return resourcelock.NewFromKubeconfig(
-			ec.ResourceLockType,
-			ec.Namespace,
-			ec.Name,
-			resourcelock.ResourceLockConfig{
-				Identity: id,
-			},
-			jsonClientConfig(ec.restCfg),
-			ec.TTL/2,
-		)
+		return ec.leaseLock(id)
 	}
+}
+
+// leaseLock builds the client-go lock for a Lease (or another Kubernetes object,
+// per ResourceLockType) of this election's name and namespace.
+func (ec *ElectionConfig) leaseLock(id string) (resourcelock.Interface, error) {
+	lockType := ec.ResourceLockType
+	if lockType == SQLLockType {
+		lockType = resourcelock.LeasesResourceLock
+	}
+	return resourcelock.NewFromKubeconfig(
+		lockType,
+		ec.Namespace,
+		ec.Name,
+		resourcelock.ResourceLockConfig{
+			Identity: id,
+		},
+		jsonClientConfig(ec.restCfg),
+		ec.TTL/2,
+	)
 }
 
 func defaultElectionTTL() time.Duration {
