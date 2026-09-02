@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -19,6 +20,7 @@ const (
 	devLeaderTTL     = time.Hour
 
 	FileLockType = "file"
+	SQLLockType  = "sql"
 )
 
 type OnLeader func(context.Context) error
@@ -28,6 +30,10 @@ type ElectionConfig struct {
 	TTL                               time.Duration
 	Name, Namespace, ResourceLockType string
 	restCfg                           *rest.Config
+	sqlDB                             *sql.DB
+	// bridgeLegacyLease makes a SQL lock defer to the Lease of the same name until
+	// its first row exists. See WithLegacyLeaseLock.
+	bridgeLegacyLease bool
 }
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
@@ -66,6 +72,67 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 	}
 }
 
+// NewSQLElectionConfig returns a config whose lock is a row in the leader_lock table
+// of db rather than a Lease or a file. Timings are the same as the default config.
+func NewSQLElectionConfig(name string, db *sql.DB) *ElectionConfig {
+	return &ElectionConfig{
+		TTL:              defaultElectionTTL(),
+		Name:             name,
+		ResourceLockType: SQLLockType,
+		sqlDB:            db,
+	}
+}
+
+// WithLegacyLeaseLock makes a SQL election defer to the Lease of the same name in
+// namespace, reached through cfg, until the SQL lock's first row exists. Use it for
+// the release that moves an election from the Lease to the SQL lock, so that the
+// rolling update keeps one leader, and drop it in the release after. See
+// locks.WithLegacyLock.
+func (ec *ElectionConfig) WithLegacyLeaseLock(namespace string, cfg *rest.Config) *ElectionConfig {
+	ec.Namespace = namespace
+	ec.restCfg = cfg
+	ec.bridgeLegacyLease = true
+	return ec
+}
+
+// resourceLock builds the lock for ResourceLockType, held under identity id.
+func (ec *ElectionConfig) resourceLock(ctx context.Context, id string) (resourcelock.Interface, error) {
+	switch ec.ResourceLockType {
+	case FileLockType:
+		return locks.NewFile(id, ec.Name), nil
+	case SQLLockType:
+		var opts []locks.SQLOption
+		if ec.bridgeLegacyLease {
+			legacy, err := ec.leaseLock(id)
+			if err != nil {
+				return nil, fmt.Errorf("building the legacy lease lock: %w", err)
+			}
+			opts = append(opts, locks.WithLegacyLock(legacy))
+		}
+		return locks.NewSQL(ctx, ec.sqlDB, ec.Name, id, opts...)
+	default:
+		return ec.leaseLock(id)
+	}
+}
+
+// leaseLock builds the client-go lock for this election's Kubernetes object.
+func (ec *ElectionConfig) leaseLock(id string) (resourcelock.Interface, error) {
+	lockType := ec.ResourceLockType
+	if lockType == SQLLockType {
+		lockType = resourcelock.LeasesResourceLock
+	}
+	return resourcelock.NewFromKubeconfig(
+		lockType,
+		ec.Namespace,
+		ec.Name,
+		resourcelock.ResourceLockConfig{
+			Identity: id,
+		},
+		jsonClientConfig(ec.restCfg),
+		ec.TTL/2,
+	)
+}
+
 func defaultElectionTTL() time.Duration {
 	if os.Getenv("NAH_DEV_MODE") != "" {
 		return devLeaderTTL
@@ -91,27 +158,14 @@ func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader,
 }
 
 func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
-	var (
-		rl  resourcelock.Interface
-		err error
-	)
-	switch ec.ResourceLockType {
-	case FileLockType:
-		rl = locks.NewFile(id, ec.Name)
-	default:
-		rl, err = resourcelock.NewFromKubeconfig(
-			ec.ResourceLockType,
-			ec.Namespace,
-			ec.Name,
-			resourcelock.ResourceLockConfig{
-				Identity: id,
-			},
-			jsonClientConfig(ec.restCfg),
-			ec.TTL/2,
-		)
-	}
+	rl, err := ec.resourceLock(ctx, id)
 	if err != nil {
 		return fmt.Errorf("error creating leader lock for %s: %v", ec.Name, err)
+	}
+	if ec.bridgeLegacyLease {
+		log.Infof("leader election %s: lock %s, deferring to the legacy Lease %s/%s until the first row exists", ec.Name, rl.Describe(), ec.Namespace, ec.Name)
+	} else {
+		log.Infof("leader election %s: lock %s", ec.Name, rl.Describe())
 	}
 
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
