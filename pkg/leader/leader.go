@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -19,6 +20,7 @@ const (
 	devLeaderTTL     = time.Hour
 
 	FileLockType = "file"
+	SQLLockType  = "sql"
 )
 
 type OnLeader func(context.Context) error
@@ -28,6 +30,7 @@ type ElectionConfig struct {
 	TTL                               time.Duration
 	Name, Namespace, ResourceLockType string
 	restCfg                           *rest.Config
+	sqlDB                             *sql.DB
 }
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
@@ -66,6 +69,42 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 	}
 }
 
+// NewSQLElectionConfig returns a config whose lock is a row in a leader_lock table in
+// db rather than a Lease or a file. TTL, RenewDeadline and RetryPeriod are the same as
+// the default config; only the storage behind the lock differs. Use this when the
+// controller's own store is SQL-backed, where a Lease in a versioned object store is
+// the most expensive object in the database.
+func NewSQLElectionConfig(name string, db *sql.DB) *ElectionConfig {
+	return &ElectionConfig{
+		TTL:              defaultElectionTTL(),
+		Name:             name,
+		ResourceLockType: SQLLockType,
+		sqlDB:            db,
+	}
+}
+
+// resourceLock builds the lock the elector will run against, chosen by
+// ResourceLockType. id is the identity the elector will hold the lock under.
+func (ec *ElectionConfig) resourceLock(ctx context.Context, id string) (resourcelock.Interface, error) {
+	switch ec.ResourceLockType {
+	case FileLockType:
+		return locks.NewFile(id, ec.Name), nil
+	case SQLLockType:
+		return locks.NewSQL(ctx, ec.sqlDB, ec.Name, id)
+	default:
+		return resourcelock.NewFromKubeconfig(
+			ec.ResourceLockType,
+			ec.Namespace,
+			ec.Name,
+			resourcelock.ResourceLockConfig{
+				Identity: id,
+			},
+			jsonClientConfig(ec.restCfg),
+			ec.TTL/2,
+		)
+	}
+}
+
 func defaultElectionTTL() time.Duration {
 	if os.Getenv("NAH_DEV_MODE") != "" {
 		return devLeaderTTL
@@ -91,25 +130,7 @@ func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader,
 }
 
 func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
-	var (
-		rl  resourcelock.Interface
-		err error
-	)
-	switch ec.ResourceLockType {
-	case FileLockType:
-		rl = locks.NewFile(id, ec.Name)
-	default:
-		rl, err = resourcelock.NewFromKubeconfig(
-			ec.ResourceLockType,
-			ec.Namespace,
-			ec.Name,
-			resourcelock.ResourceLockConfig{
-				Identity: id,
-			},
-			jsonClientConfig(ec.restCfg),
-			ec.TTL/2,
-		)
-	}
+	rl, err := ec.resourceLock(ctx, id)
 	if err != nil {
 		return fmt.Errorf("error creating leader lock for %s: %v", ec.Name, err)
 	}
