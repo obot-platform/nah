@@ -28,6 +28,15 @@ type ElectionConfig struct {
 	TTL                               time.Duration
 	Name, Namespace, ResourceLockType string
 	restCfg                           *rest.Config
+
+	// NewLock, when set, supplies the lock for this election instead of one built
+	// from ResourceLockType. It is given the identity the elector will hold the lock
+	// under, so the lock's Identity() matches what nah reports as the leader.
+	//
+	// Use it to keep the lock out of a store that is a poor fit for it. A lock is
+	// rewritten on every renew, and in an append-only versioned store that makes it
+	// the most expensive object in the database, read by every replica each period.
+	NewLock func(identity string) (resourcelock.Interface, error)
 }
 
 func NewDefaultElectionConfig(namespace, name string, cfg *rest.Config) *ElectionConfig {
@@ -66,6 +75,41 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 	}
 }
 
+// NewElectionConfigWithLock returns a config whose lock comes from newLock rather
+// than from a Lease or a file. TTL, RenewDeadline and RetryPeriod are the same as
+// the default config; only the storage behind the lock differs.
+func NewElectionConfigWithLock(name string, newLock func(identity string) (resourcelock.Interface, error)) *ElectionConfig {
+	return &ElectionConfig{
+		TTL:     defaultElectionTTL(),
+		Name:    name,
+		NewLock: newLock,
+	}
+}
+
+// resourceLock builds the lock the elector will run against. A caller-supplied
+// NewLock wins; otherwise the lock is chosen by ResourceLockType exactly as before.
+func (ec *ElectionConfig) resourceLock(id string) (resourcelock.Interface, error) {
+	if ec.NewLock != nil {
+		return ec.NewLock(id)
+	}
+
+	switch ec.ResourceLockType {
+	case FileLockType:
+		return locks.NewFile(id, ec.Name), nil
+	default:
+		return resourcelock.NewFromKubeconfig(
+			ec.ResourceLockType,
+			ec.Namespace,
+			ec.Name,
+			resourcelock.ResourceLockConfig{
+				Identity: id,
+			},
+			jsonClientConfig(ec.restCfg),
+			ec.TTL/2,
+		)
+	}
+}
+
 func defaultElectionTTL() time.Duration {
 	if os.Getenv("NAH_DEV_MODE") != "" {
 		return devLeaderTTL
@@ -91,25 +135,7 @@ func (ec *ElectionConfig) Run(ctx context.Context, id string, onLeader OnLeader,
 }
 
 func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwitchLeader OnNewLeader, signalDone func()) error {
-	var (
-		rl  resourcelock.Interface
-		err error
-	)
-	switch ec.ResourceLockType {
-	case FileLockType:
-		rl = locks.NewFile(id, ec.Name)
-	default:
-		rl, err = resourcelock.NewFromKubeconfig(
-			ec.ResourceLockType,
-			ec.Namespace,
-			ec.Name,
-			resourcelock.ResourceLockConfig{
-				Identity: id,
-			},
-			jsonClientConfig(ec.restCfg),
-			ec.TTL/2,
-		)
-	}
+	rl, err := ec.resourceLock(id)
 	if err != nil {
 		return fmt.Errorf("error creating leader lock for %s: %v", ec.Name, err)
 	}
