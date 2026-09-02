@@ -166,7 +166,21 @@ func (l *sqlLock) getLegacy(ctx context.Context) (*resourcelock.LeaderElectionRe
 	}
 	l.version = 0
 	l.observedLegacy = true
+	l.noteLegacyState(record, l.now())
 	return record, raw, nil
+}
+
+// noteLegacyState keeps legacyFreeSince meaning "the legacy lock has been free
+// continuously since this instant". It must run on every read of the legacy lock,
+// not only during Update: while a live holder exists client-go only calls Get, and a
+// timestamp left over from an earlier brief release would otherwise make the grace
+// period look already spent when the holder finally releases.
+func (l *sqlLock) noteLegacyState(record *resourcelock.LeaderElectionRecord, now time.Time) {
+	if l.heldByOther(record, now) {
+		l.legacyFreeSince = time.Time{}
+	} else if l.legacyFreeSince.IsZero() {
+		l.legacyFreeSince = now
+	}
 }
 
 // Create inserts the record. It fails with AlreadyExists if the row is present;
@@ -241,14 +255,15 @@ func (l *sqlLock) takeOverFromLegacy(ctx context.Context, ler resourcelock.Leade
 		return fmt.Errorf("locks: reading the legacy lock for %s: %w", l.name, err)
 	}
 	now := l.now()
-	if err == nil && l.heldByOther(record, now) {
-		// A replica on the legacy lock took the election. Stay a follower.
-		l.legacyFreeSince = time.Time{}
-		return apierrors.NewConflict(sqlGroupResource, l.name,
-			fmt.Errorf("the legacy lock is held by %s", record.HolderIdentity))
-	}
-
-	if l.legacyFreeSince.IsZero() {
+	if err == nil {
+		l.noteLegacyState(record, now)
+		if l.heldByOther(record, now) {
+			// A replica on the legacy lock took the election. Stay a follower.
+			return apierrors.NewConflict(sqlGroupResource, l.name,
+				fmt.Errorf("the legacy lock is held by %s", record.HolderIdentity))
+		}
+	} else if l.legacyFreeSince.IsZero() {
+		// NotFound: the legacy lock is gone entirely.
 		l.legacyFreeSince = now
 	}
 	if wait := l.grace - now.Sub(l.legacyFreeSince); wait > 0 {

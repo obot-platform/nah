@@ -192,6 +192,56 @@ func TestSQLLegacyReacquiredDuringGraceBacksOff(t *testing.T) {
 	}
 }
 
+func TestSQLLegacyGraceRestartsAfterAHolderSeenOnlyThroughGet(t *testing.T) {
+	// The call pattern client-go really uses: while a live holder exists it calls only
+	// Get, never Update. A brief release seen earlier must not leave a stale "free
+	// since" timestamp that makes the grace period look spent at the next release.
+	// Found by the mixed-version rollout test, where the row appeared 1.3s after the
+	// last old replica released instead of after the 5s grace period.
+	ctx := context.Background()
+	l, legacy, clock := newBridged(t, "new-1")
+
+	// old-1 releases; this replica polls once during the gap and starts its grace.
+	legacy.released(*clock)
+	if _, _, err := l.Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
+		t.Fatalf("expected the grace period to start, got %v", err)
+	}
+
+	// old-2 takes the Lease within its next poll and leads for 40s. client-go sees a
+	// live holder on every Get and does not call Update.
+	for i := 0; i < 20; i++ {
+		*clock = clock.Add(2 * time.Second)
+		legacy.held("old-2", *clock)
+		got, _, err := l.Get(ctx)
+		if err != nil || got.HolderIdentity != "old-2" {
+			t.Fatalf("Get during old-2's term: holder %q err %v", got.HolderIdentity, err)
+		}
+	}
+
+	// old-2 releases. The first Update must start a fresh grace period.
+	*clock = clock.Add(time.Second)
+	legacy.released(*clock)
+	if _, _, err := l.Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
+		t.Fatalf("takeover must wait a full grace period after old-2's release, got %v", err)
+	}
+	if rowCount(t, l) != 0 {
+		t.Fatal("row created before the grace period after the second release")
+	}
+	*clock = clock.Add(6 * time.Second)
+	if err := l.Update(ctx, record("new-1")); err != nil {
+		t.Fatalf("takeover after the grace period: %v", err)
+	}
+	if rowCount(t, l) != 1 {
+		t.Fatal("expected one row")
+	}
+}
+
 func TestSQLLegacyExpiredHolderIsTakenOver(t *testing.T) {
 	ctx := context.Background()
 	l, legacy, clock := newBridged(t, "new-1")
