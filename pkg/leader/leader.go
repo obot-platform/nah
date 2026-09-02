@@ -31,8 +31,8 @@ type ElectionConfig struct {
 	Name, Namespace, ResourceLockType string
 	restCfg                           *rest.Config
 	sqlDB                             *sql.DB
-	// bridgeLegacyLease makes a SQL lock defer to the Lease of the same name and
-	// namespace, reached through restCfg, until the SQL lock's first row exists.
+	// bridgeLegacyLease makes a SQL lock defer to the Lease of the same name until
+	// its first row exists. See WithLegacyLeaseLock.
 	bridgeLegacyLease bool
 }
 
@@ -72,11 +72,8 @@ func NewElectionConfig(ttl time.Duration, namespace, name, lockType string, cfg 
 	}
 }
 
-// NewSQLElectionConfig returns a config whose lock is a row in a leader_lock table in
-// db rather than a Lease or a file. TTL, RenewDeadline and RetryPeriod are the same as
-// the default config; only the storage behind the lock differs. Use this when the
-// controller's own store is SQL-backed, where a Lease in a versioned object store is
-// the most expensive object in the database.
+// NewSQLElectionConfig returns a config whose lock is a row in the leader_lock table
+// of db rather than a Lease or a file. Timings are the same as the default config.
 func NewSQLElectionConfig(name string, db *sql.DB) *ElectionConfig {
 	return &ElectionConfig{
 		TTL:              defaultElectionTTL(),
@@ -86,12 +83,11 @@ func NewSQLElectionConfig(name string, db *sql.DB) *ElectionConfig {
 	}
 }
 
-// WithLegacyLeaseLock makes a SQL election defer to the Lease that earlier versions
-// of the program held for the same name, in namespace, reached through cfg, until
-// the first row of the SQL lock exists. Use it for the release that moves an
-// election from the Lease lock to the SQL lock, so that a rolling update in which
-// old and new replicas overlap still has one leader. See locks.WithLegacyLock for
-// the rules. Drop the call once every replica runs the SQL lock.
+// WithLegacyLeaseLock makes a SQL election defer to the Lease of the same name in
+// namespace, reached through cfg, until the SQL lock's first row exists. Use it for
+// the release that moves an election from the Lease to the SQL lock, so that the
+// rolling update keeps one leader, and drop it in the release after. See
+// locks.WithLegacyLock.
 func (ec *ElectionConfig) WithLegacyLeaseLock(namespace string, cfg *rest.Config) *ElectionConfig {
 	ec.Namespace = namespace
 	ec.restCfg = cfg
@@ -99,8 +95,7 @@ func (ec *ElectionConfig) WithLegacyLeaseLock(namespace string, cfg *rest.Config
 	return ec
 }
 
-// resourceLock builds the lock the elector will run against, chosen by
-// ResourceLockType. id is the identity the elector will hold the lock under.
+// resourceLock builds the lock for ResourceLockType, held under identity id.
 func (ec *ElectionConfig) resourceLock(ctx context.Context, id string) (resourcelock.Interface, error) {
 	switch ec.ResourceLockType {
 	case FileLockType:
@@ -120,8 +115,7 @@ func (ec *ElectionConfig) resourceLock(ctx context.Context, id string) (resource
 	}
 }
 
-// leaseLock builds the client-go lock for a Lease (or another Kubernetes object,
-// per ResourceLockType) of this election's name and namespace.
+// leaseLock builds the client-go lock for this election's Kubernetes object.
 func (ec *ElectionConfig) leaseLock(id string) (resourcelock.Interface, error) {
 	lockType := ec.ResourceLockType
 	if lockType == SQLLockType {

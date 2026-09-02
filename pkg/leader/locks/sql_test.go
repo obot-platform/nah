@@ -154,10 +154,9 @@ func TestSQLStaleUpdateConflicts(t *testing.T) {
 	err = b.Update(ctx, record("b"))
 	assert.True(t, apierrors.IsConflict(err), "expected Conflict, got %v", err)
 
-	// After re-reading, as client-go's slow path does, b sees that a still holds
-	// the lock, and only then can it write. All verification below reads through
-	// b on purpose: a Get refreshes the caller's observed version, and the point of
-	// the final assertion is that a has NOT re-read since its own renew.
+	// After re-reading, as client-go's slow path does, b can write. Verification
+	// reads through b on purpose: a Get refreshes the caller's observed version, and
+	// the final assertion is that a has not re-read since its own renew.
 	got, _, err = b.Get(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "a", got.HolderIdentity, "a must still hold the lock")

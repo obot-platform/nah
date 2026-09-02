@@ -9,11 +9,9 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
-// client-go drives a lock from a single goroutine, so Get, Create and Update never
-// overlap in practice. The lock still guards its own state, and this test, run under
-// the race detector, is what proves it: every method is called from several
-// goroutines at once, on the plain lock and on one with a legacy lock behind it.
-// Errors are expected (conflicts, lost races) and are not the point.
+// Every method is called from several goroutines at once, on a plain lock and on a
+// bridged one. Run under the race detector. Errors (conflicts, lost races) are
+// expected and not the point.
 func TestSQLLockIsSafeForConcurrentUse(t *testing.T) {
 	ctx := context.Background()
 	plain, err := NewSQL(ctx, newDB(t), "plain", "me")

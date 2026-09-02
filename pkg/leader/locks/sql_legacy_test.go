@@ -12,8 +12,8 @@ import (
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 )
 
-// fakeLegacy stands in for the Lease lock an earlier version of a program used. Tests
-// set what its Get answers; Create and Update are never expected to be called.
+// fakeLegacy stands in for the Lease lock an earlier release used. Tests set what its
+// Get answers; Create and Update must never be called.
 type fakeLegacy struct {
 	record *resourcelock.LeaderElectionRecord
 	err    error
@@ -57,9 +57,8 @@ func (f *fakeLegacy) released(at time.Time) {
 	f.record = &resourcelock.LeaderElectionRecord{HolderIdentity: "", LeaseDurationSeconds: 1, RenewTime: metav1.NewTime(at)}
 }
 
-// bridge is a SQL lock with a fake legacy lock, a controllable clock, and a recorded
-// sleep. Sleeping advances the clock and runs onSleep, which lets a test change the
-// legacy lock "during" the grace period.
+// bridge is a SQL lock with a fake legacy lock and a fake clock. Sleeping advances the
+// clock and runs onSleep, so a test can change the legacy lock during the grace period.
 type bridge struct {
 	l       *sqlLock
 	legacy  *fakeLegacy
@@ -205,9 +204,8 @@ func TestSQLLegacyClaimedDuringGraceBacksOff(t *testing.T) {
 }
 
 func TestSQLLegacyClaimDuringGraceIsSeenDespiteClockSkew(t *testing.T) {
-	// The old replica that claims the Lease during the wait runs with a clock two
-	// minutes behind ours, so by timestamps its fresh claim already looks expired.
-	// The re-read must go by the record having changed, not by the timestamps.
+	// The claiming replica's clock is two minutes behind ours, so by timestamps its
+	// fresh claim already looks expired. The re-read must go by the record changing.
 	ctx := context.Background()
 	b := newBridge(t, "new-1")
 	b.legacy.released(b.clock)
@@ -349,9 +347,8 @@ func TestSQLLegacyReadErrorIsReturned(t *testing.T) {
 }
 
 func TestSQLTwoNewReplicasTakeOverOnce(t *testing.T) {
-	// Both new replicas see the same release and both wait the grace period; only
-	// one row can be created and the other must see AlreadyExists, which client-go
-	// treats as a lost race.
+	// Both new replicas see the same release; only one row can be created and the
+	// other must see AlreadyExists, which client-go treats as a lost race.
 	ctx := context.Background()
 	a := newBridge(t, "new-a")
 	bl := &sqlLock{db: a.l.db, name: a.l.name, identity: "new-b", legacy: a.legacy, grace: a.l.grace, now: a.l.now, sleep: a.l.sleep}
