@@ -57,20 +57,36 @@ func (f *fakeLegacy) released(at time.Time) {
 	f.record = &resourcelock.LeaderElectionRecord{HolderIdentity: "", LeaseDurationSeconds: 1, RenewTime: metav1.NewTime(at)}
 }
 
-// newBridged returns a SQL lock with a fake legacy lock, a controllable clock, and a
-// short grace period. The clock starts at a fixed instant that the tests advance.
-func newBridged(t *testing.T, identity string) (*sqlLock, *fakeLegacy, *time.Time) {
+// bridge is a SQL lock with a fake legacy lock, a controllable clock, and a recorded
+// sleep. Sleeping advances the clock and runs onSleep, which lets a test change the
+// legacy lock "during" the grace period.
+type bridge struct {
+	l       *sqlLock
+	legacy  *fakeLegacy
+	clock   time.Time
+	slept   []time.Duration
+	onSleep func()
+}
+
+func newBridge(t *testing.T, identity string) *bridge {
 	t.Helper()
-	legacy := &fakeLegacy{}
-	clock := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
-	lock, err := NewSQL(context.Background(), newDB(t), "election", identity, WithLegacyLock(legacy))
+	b := &bridge{legacy: &fakeLegacy{}, clock: time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)}
+	lock, err := NewSQL(context.Background(), newDB(t), "election", identity, WithLegacyLock(b.legacy))
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := lock.(*sqlLock)
-	l.grace = 5 * time.Second
-	l.now = func() time.Time { return clock }
-	return l, legacy, &clock
+	b.l = lock.(*sqlLock)
+	b.l.grace = 5 * time.Second
+	b.l.now = func() time.Time { return b.clock }
+	b.l.sleep = func(_ context.Context, d time.Duration) error {
+		b.slept = append(b.slept, d)
+		b.clock = b.clock.Add(d)
+		if b.onSleep != nil {
+			b.onSleep()
+		}
+		return nil
+	}
+	return b
 }
 
 func rowCount(t *testing.T, l *sqlLock) int {
@@ -84,10 +100,10 @@ func rowCount(t *testing.T, l *sqlLock) int {
 
 func TestSQLLegacyHeldLeaseIsReportedAndNotTakenOver(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "new-1")
-	legacy.held("old-1", *clock)
+	b := newBridge(t, "new-1")
+	b.legacy.held("old-1", b.clock)
 
-	got, _, err := l.Get(ctx)
+	got, _, err := b.l.Get(ctx)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -97,169 +113,114 @@ func TestSQLLegacyHeldLeaseIsReportedAndNotTakenOver(t *testing.T) {
 
 	// client-go would not call Update while the holder is live, but if it did the
 	// lock must still refuse rather than create a second election.
-	err = l.Update(ctx, record("new-1"))
+	err = b.l.Update(ctx, record("new-1"))
 	if !apierrors.IsConflict(err) {
 		t.Fatalf("Update against a held legacy lock should be Conflict, got %v", err)
 	}
-	if rowCount(t, l) != 0 {
+	if rowCount(t, b.l) != 0 {
 		t.Fatal("a row was created while the legacy lock is held")
+	}
+	if len(b.slept) != 0 {
+		t.Fatal("no grace period should run while the legacy lock is held")
 	}
 }
 
 func TestSQLLegacyReleasedLeaseIsTakenOverAfterGrace(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "new-1")
-	legacy.released(*clock)
+	b := newBridge(t, "new-1")
+	b.legacy.released(b.clock)
 
-	if _, _, err := l.Get(ctx); err != nil {
+	if _, _, err := b.l.Get(ctx); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	// First poll after the release: the grace period starts, nothing is created.
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("first Update should be Conflict while the grace period runs, got %v", err)
+	// One Update: wait the grace period, re-check, create.
+	if err := b.l.Update(ctx, record("new-1")); err != nil {
+		t.Fatalf("Update after a release should take over, got %v", err)
 	}
-	if rowCount(t, l) != 0 {
-		t.Fatal("row created before the grace period passed")
+	if len(b.slept) != 1 || b.slept[0] != 5*time.Second {
+		t.Fatalf("expected one full grace period, slept %v", b.slept)
 	}
-
-	*clock = clock.Add(2 * time.Second)
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("Update inside the grace period should be Conflict, got %v", err)
-	}
-
-	*clock = clock.Add(4 * time.Second) // 6s since the release was first seen
-	if err := l.Update(ctx, record("new-1")); err != nil {
-		t.Fatalf("Update after the grace period should create the row, got %v", err)
-	}
-	if rowCount(t, l) != 1 {
+	if rowCount(t, b.l) != 1 {
 		t.Fatal("expected exactly one row after takeover")
 	}
 
 	// From here on the SQL row is authoritative and the legacy lock is not read.
-	gets := legacy.gets
-	got, _, err := l.Get(ctx)
+	gets := b.legacy.gets
+	got, _, err := b.l.Get(ctx)
 	if err != nil || got.HolderIdentity != "new-1" {
 		t.Fatalf("Get after takeover: holder %q err %v", got.HolderIdentity, err)
 	}
-	if err := l.Update(ctx, record("new-1")); err != nil {
+	if err := b.l.Update(ctx, record("new-1")); err != nil {
 		t.Fatalf("renew after takeover: %v", err)
 	}
-	if legacy.gets != gets {
+	if b.legacy.gets != gets {
 		t.Fatal("legacy lock was read after the row existed")
 	}
 }
 
-func TestSQLLegacyReacquiredDuringGraceBacksOff(t *testing.T) {
+func TestSQLLegacyClaimedDuringGraceBacksOff(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "new-1")
-	legacy.released(*clock)
+	b := newBridge(t, "new-1")
+	b.legacy.released(b.clock)
 
-	if _, _, err := l.Get(ctx); err != nil {
+	// A replica still on the legacy lock takes the released lease during the grace
+	// period, as it would on its next two second poll.
+	b.onSleep = func() { b.legacy.held("old-2", b.clock) }
+	if _, _, err := b.l.Get(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("expected Conflict starting the grace period, got %v", err)
+	if err := b.l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
+		t.Fatalf("expected Conflict once the legacy lock is claimed during the grace period, got %v", err)
 	}
-
-	// A replica still on the legacy lock takes the released lease, as it would on
-	// its next two second poll.
-	*clock = clock.Add(2 * time.Second)
-	legacy.held("old-2", *clock)
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("expected Conflict once the legacy lock is held again, got %v", err)
-	}
-	*clock = clock.Add(10 * time.Second)
-	legacy.held("old-2", *clock) // still renewing
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("a renewing legacy holder must keep winning, got %v", err)
-	}
-	if rowCount(t, l) != 0 {
+	if rowCount(t, b.l) != 0 {
 		t.Fatal("row created while an old replica holds the legacy lock")
 	}
 
-	// When that replica releases in turn, the grace period starts over.
-	*clock = clock.Add(time.Second)
-	legacy.released(*clock)
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("grace period must restart after a re-acquire, got %v", err)
-	}
-	*clock = clock.Add(6 * time.Second)
-	if err := l.Update(ctx, record("new-1")); err != nil {
-		t.Fatalf("takeover after the second release: %v", err)
-	}
-	if rowCount(t, l) != 1 {
-		t.Fatal("expected one row after the final takeover")
-	}
-}
-
-func TestSQLLegacyGraceRestartsAfterAHolderSeenOnlyThroughGet(t *testing.T) {
-	// The call pattern client-go really uses: while a live holder exists it calls only
-	// Get, never Update. A brief release seen earlier must not leave a stale "free
-	// since" timestamp that makes the grace period look spent at the next release.
-	// Found by the mixed-version rollout test, where the row appeared 1.3s after the
-	// last old replica released instead of after the 5s grace period.
-	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "new-1")
-
-	// old-1 releases; this replica polls once during the gap and starts its grace.
-	legacy.released(*clock)
-	if _, _, err := l.Get(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("expected the grace period to start, got %v", err)
-	}
-
-	// old-2 takes the Lease within its next poll and leads for 40s. client-go sees a
-	// live holder on every Get and does not call Update.
+	// old-2 leads for a while; client-go only calls Get and sees a live holder.
+	b.onSleep = nil
 	for i := 0; i < 20; i++ {
-		*clock = clock.Add(2 * time.Second)
-		legacy.held("old-2", *clock)
-		got, _, err := l.Get(ctx)
+		b.clock = b.clock.Add(2 * time.Second)
+		b.legacy.held("old-2", b.clock)
+		got, _, err := b.l.Get(ctx)
 		if err != nil || got.HolderIdentity != "old-2" {
 			t.Fatalf("Get during old-2's term: holder %q err %v", got.HolderIdentity, err)
 		}
 	}
 
-	// old-2 releases. The first Update must start a fresh grace period.
-	*clock = clock.Add(time.Second)
-	legacy.released(*clock)
-	if _, _, err := l.Get(ctx); err != nil {
+	// When old-2 releases in turn, the takeover waits a full grace period again.
+	b.clock = b.clock.Add(time.Second)
+	b.legacy.released(b.clock)
+	if _, _, err := b.l.Get(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("takeover must wait a full grace period after old-2's release, got %v", err)
+	if err := b.l.Update(ctx, record("new-1")); err != nil {
+		t.Fatalf("takeover after the second release: %v", err)
 	}
-	if rowCount(t, l) != 0 {
-		t.Fatal("row created before the grace period after the second release")
+	if len(b.slept) != 2 || b.slept[1] != 5*time.Second {
+		t.Fatalf("the second takeover must wait a full grace period, slept %v", b.slept)
 	}
-	*clock = clock.Add(6 * time.Second)
-	if err := l.Update(ctx, record("new-1")); err != nil {
-		t.Fatalf("takeover after the grace period: %v", err)
-	}
-	if rowCount(t, l) != 1 {
-		t.Fatal("expected one row")
+	if rowCount(t, b.l) != 1 {
+		t.Fatal("expected one row after the final takeover")
 	}
 }
 
 func TestSQLLegacyExpiredHolderIsTakenOver(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "new-1")
+	b := newBridge(t, "new-1")
 	// The holder crashed: the record still names it but has not been renewed for
 	// longer than its lease duration.
-	legacy.held("old-1", clock.Add(-2*time.Minute))
+	b.legacy.held("old-1", b.clock.Add(-2*time.Minute))
 
-	if _, _, err := l.Get(ctx); err != nil {
+	if _, _, err := b.l.Get(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
-		t.Fatalf("expected the grace period to start, got %v", err)
-	}
-	*clock = clock.Add(6 * time.Second)
-	if err := l.Update(ctx, record("new-1")); err != nil {
+	if err := b.l.Update(ctx, record("new-1")); err != nil {
 		t.Fatalf("expected takeover from an expired legacy holder, got %v", err)
 	}
-	if rowCount(t, l) != 1 {
+	if len(b.slept) != 1 {
+		t.Fatalf("expected one grace period, slept %v", b.slept)
+	}
+	if rowCount(t, b.l) != 1 {
 		t.Fatal("expected one row")
 	}
 }
@@ -268,101 +229,113 @@ func TestSQLLegacyOwnIdentityIsNotAnObstacle(t *testing.T) {
 	// A container restart keeps the pod name, so the legacy record can name this very
 	// identity. That must count as free, the same way client-go treats its own lease.
 	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "same-pod")
-	legacy.held("same-pod", *clock)
+	b := newBridge(t, "same-pod")
+	b.legacy.held("same-pod", b.clock)
 
-	if _, _, err := l.Get(ctx); err != nil {
+	if _, _, err := b.l.Get(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Update(ctx, record("same-pod")); !apierrors.IsConflict(err) {
-		t.Fatalf("expected the grace period to start, got %v", err)
-	}
-	*clock = clock.Add(6 * time.Second)
-	if err := l.Update(ctx, record("same-pod")); err != nil {
+	if err := b.l.Update(ctx, record("same-pod")); err != nil {
 		t.Fatalf("expected takeover, got %v", err)
+	}
+	if rowCount(t, b.l) != 1 {
+		t.Fatal("expected one row")
+	}
+}
+
+func TestSQLLegacyShutdownDuringGraceAbortsTakeover(t *testing.T) {
+	ctx := context.Background()
+	b := newBridge(t, "new-1")
+	b.legacy.released(b.clock)
+	b.l.sleep = func(context.Context, time.Duration) error { return context.Canceled }
+
+	if _, _, err := b.l.Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.l.Update(ctx, record("new-1")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the context error, got %v", err)
+	}
+	if rowCount(t, b.l) != 0 {
+		t.Fatal("row created although the process was shutting down")
 	}
 }
 
 func TestSQLLegacyMissingBehavesLikeNoLegacy(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, _ := newBridged(t, "new-1")
-	legacy.notFound()
+	b := newBridge(t, "new-1")
+	b.legacy.notFound()
 
-	_, _, err := l.Get(ctx)
+	_, _, err := b.l.Get(ctx)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("with no legacy record Get must be NotFound so client-go calls Create, got %v", err)
 	}
-	if err := l.Create(ctx, record("new-1")); err != nil {
+	if err := b.l.Create(ctx, record("new-1")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if rowCount(t, l) != 1 {
+	if rowCount(t, b.l) != 1 {
 		t.Fatal("expected one row")
 	}
 }
 
 func TestSQLLegacyIsIgnoredOnceARowExists(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, clock := newBridged(t, "new-1")
-	if err := l.Create(ctx, record("new-1")); err != nil {
+	b := newBridge(t, "new-1")
+	if err := b.l.Create(ctx, record("new-1")); err != nil {
 		t.Fatal(err)
 	}
-	legacy.held("old-1", *clock) // a stale old replica still renewing its own lease
+	b.legacy.held("old-1", b.clock) // a stale old replica still renewing its own lease
 
-	got, _, err := l.Get(ctx)
+	got, _, err := b.l.Get(ctx)
 	if err != nil || got.HolderIdentity != "new-1" {
 		t.Fatalf("Get must answer from the row once it exists: holder %q err %v", got.HolderIdentity, err)
 	}
-	if err := l.Update(ctx, record("new-1")); err != nil {
+	if err := b.l.Update(ctx, record("new-1")); err != nil {
 		t.Fatalf("Update must run normally once the row exists: %v", err)
 	}
-	if legacy.gets != 0 {
+	if b.legacy.gets != 0 {
 		t.Fatal("legacy lock was read although a row exists")
 	}
 }
 
 func TestSQLLegacyReadErrorIsReturned(t *testing.T) {
 	ctx := context.Background()
-	l, legacy, _ := newBridged(t, "new-1")
-	legacy.err = errors.New("api unreachable")
+	b := newBridge(t, "new-1")
+	b.legacy.err = errors.New("api unreachable")
 
-	if _, _, err := l.Get(ctx); err == nil || apierrors.IsNotFound(err) {
+	if _, _, err := b.l.Get(ctx); err == nil || apierrors.IsNotFound(err) {
 		t.Fatalf("a legacy read failure must surface as an error, not NotFound, got %v", err)
 	}
-	if rowCount(t, l) != 0 {
+	if rowCount(t, b.l) != 0 {
 		t.Fatal("row created despite a legacy read failure")
 	}
 }
 
 func TestSQLTwoNewReplicasTakeOverOnce(t *testing.T) {
-	// Both new replicas see the same release; the grace period passes for both; only
+	// Both new replicas see the same release and both wait the grace period; only
 	// one row can be created and the other must see AlreadyExists, which client-go
 	// treats as a lost race.
 	ctx := context.Background()
-	a, legacyA, clockA := newBridged(t, "new-a")
-	b := &sqlLock{db: a.db, name: a.name, identity: "new-b", legacy: legacyA, grace: a.grace, now: a.now}
-	legacyA.released(*clockA)
+	a := newBridge(t, "new-a")
+	bl := &sqlLock{db: a.l.db, name: a.l.name, identity: "new-b", legacy: a.legacy, grace: a.l.grace, now: a.l.now, sleep: a.l.sleep}
+	a.legacy.released(a.clock)
 
-	for _, l := range []*sqlLock{a, b} {
+	for _, l := range []*sqlLock{a.l, bl} {
 		if _, _, err := l.Get(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := l.Update(ctx, record(l.identity)); !apierrors.IsConflict(err) {
-			t.Fatalf("%s: expected grace Conflict, got %v", l.identity, err)
-		}
 	}
-	*clockA = clockA.Add(6 * time.Second)
-	if err := a.Update(ctx, record("new-a")); err != nil {
+	if err := a.l.Update(ctx, record("new-a")); err != nil {
 		t.Fatalf("new-a takeover: %v", err)
 	}
-	err := b.Update(ctx, record("new-b"))
+	err := bl.Update(ctx, record("new-b"))
 	if !apierrors.IsAlreadyExists(err) {
 		t.Fatalf("new-b must lose the race with AlreadyExists, got %v", err)
 	}
-	got, _, err := b.Get(ctx)
+	got, _, err := bl.Get(ctx)
 	if err != nil || got.HolderIdentity != "new-a" {
 		t.Fatalf("new-b must now follow new-a: holder %q err %v", got.HolderIdentity, err)
 	}
-	if rowCount(t, a) != 1 {
+	if rowCount(t, a.l) != 1 {
 		t.Fatal("expected exactly one row")
 	}
 }

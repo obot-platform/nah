@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/obot-platform/nah/pkg/log"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -59,10 +60,10 @@ type SQLOption func(*sqlLock)
 // While the table has no row, Get reports the legacy record, so a replica on this
 // lock is an ordinary follower behind a leader on the legacy lock. When client-go
 // finds the legacy record free (released, or not renewed for a full lease duration)
-// and calls Update, the SQL lock re-reads the legacy lock, backs off if a replica
-// on the legacy lock has re-acquired it, waits legacyTakeoverGrace so that such
-// replicas win any race, and only then creates the row. From then on the legacy lock
-// is never read again. Remove the option once every replica runs the SQL lock.
+// and calls Update, the SQL lock waits legacyTakeoverGrace inside that call, reads
+// the legacy lock again, backs off if a replica on the legacy lock claimed it in the
+// meantime, and otherwise creates the row. From then on the legacy lock is never read
+// again. Remove the option once every replica runs the SQL lock.
 func WithLegacyLock(legacy resourcelock.Interface) SQLOption {
 	return func(l *sqlLock) { l.legacy = legacy }
 }
@@ -86,11 +87,12 @@ type sqlLock struct {
 	// observedLegacy records that the last Get answered from the legacy lock, which
 	// is the one case where Update may run with version zero.
 	observedLegacy bool
-	// legacyFreeSince is when this lock first saw the legacy lock free. Zero while it
-	// is held.
-	legacyFreeSince time.Time
-	grace           time.Duration
-	now             func() time.Time
+	// legacyHolderLogged is the legacy holder last mentioned in the log, so that
+	// following a holder is logged once per holder rather than once per poll.
+	legacyHolderLogged string
+	grace              time.Duration
+	now                func() time.Time
+	sleep              func(context.Context, time.Duration) error
 }
 
 // NewSQL returns a lock for the election called name, held under identity, backed by
@@ -121,7 +123,7 @@ func NewSQL(ctx context.Context, db *sql.DB, name, identity string, opts ...SQLO
 		}
 	}
 
-	l := &sqlLock{db: db, name: name, identity: identity, grace: legacyTakeoverGrace, now: time.Now}
+	l := &sqlLock{db: db, name: name, identity: identity, grace: legacyTakeoverGrace, now: time.Now, sleep: sleepContext}
 	for _, opt := range opts {
 		opt(l)
 	}
@@ -158,7 +160,6 @@ func (l *sqlLock) Get(ctx context.Context) (*resourcelock.LeaderElectionRecord, 
 
 	l.version = version
 	l.observedLegacy = false
-	l.legacyFreeSince = time.Time{}
 	return &record, raw, nil
 }
 
@@ -175,21 +176,20 @@ func (l *sqlLock) getLegacy(ctx context.Context) (*resourcelock.LeaderElectionRe
 	}
 	l.version = 0
 	l.observedLegacy = true
-	l.noteLegacyState(record, l.now())
+	if l.heldByOther(record, l.now()) {
+		l.logFollowing(record.HolderIdentity)
+	}
 	return record, raw, nil
 }
 
-// noteLegacyState keeps legacyFreeSince meaning "the legacy lock has been free
-// continuously since this instant". It must run on every read of the legacy lock,
-// not only during Update: while a live holder exists client-go only calls Get, and a
-// timestamp left over from an earlier brief release would otherwise make the grace
-// period look already spent when the holder finally releases.
-func (l *sqlLock) noteLegacyState(record *resourcelock.LeaderElectionRecord, now time.Time) {
-	if l.heldByOther(record, now) {
-		l.legacyFreeSince = time.Time{}
-	} else if l.legacyFreeSince.IsZero() {
-		l.legacyFreeSince = now
+// logFollowing notes, once per holder, that this replica is following a leader on
+// the legacy lock.
+func (l *sqlLock) logFollowing(holder string) {
+	if holder == l.legacyHolderLogged {
+		return
 	}
+	l.legacyHolderLogged = holder
+	log.Infof("%s has no row yet; following the legacy lock %s held by %s", l.Describe(), l.legacy.Describe(), holder)
 }
 
 // Create inserts the record. It fails with AlreadyExists if the row is present;
@@ -221,7 +221,6 @@ func (l *sqlLock) create(ctx context.Context, ler resourcelock.LeaderElectionRec
 
 	l.version = 1
 	l.observedLegacy = false
-	l.legacyFreeSince = time.Time{}
 	return nil
 }
 
@@ -265,33 +264,47 @@ func (l *sqlLock) Update(ctx context.Context, ler resourcelock.LeaderElectionRec
 	return nil
 }
 
-// takeOverFromLegacy creates the first row once the legacy lock has been free for the
-// grace period. Every refusal is a Conflict, which client-go logs and retries on its
-// next poll, so the takeover is spread over a few polls rather than blocking one.
-// The caller holds mu.
+// takeOverFromLegacy creates the first row once the legacy lock has stayed free for
+// the grace period. The wait happens inside this call, so a takeover is one Update
+// as far as client-go can tell and nothing is logged as a failure along the way. The
+// caller holds mu.
 func (l *sqlLock) takeOverFromLegacy(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
 	record, _, err := l.legacy.Get(ctx)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("locks: reading the legacy lock for %s: %w", l.name, err)
 	}
-	now := l.now()
-	if err == nil {
-		l.noteLegacyState(record, now)
-		if l.heldByOther(record, now) {
-			// A replica on the legacy lock took the election. Stay a follower.
-			return apierrors.NewConflict(sqlGroupResource, l.name,
-				fmt.Errorf("the legacy lock is held by %s", record.HolderIdentity))
-		}
-	} else if l.legacyFreeSince.IsZero() {
-		// NotFound: the legacy lock is gone entirely.
-		l.legacyFreeSince = now
-	}
-	if wait := l.grace - now.Sub(l.legacyFreeSince); wait > 0 {
+	if err == nil && l.heldByOther(record, l.now()) {
+		l.logFollowing(record.HolderIdentity)
 		return apierrors.NewConflict(sqlGroupResource, l.name,
-			fmt.Errorf("the legacy lock is free; waiting %s for replicas on the legacy lock to claim it first", wait.Round(time.Second)))
+			fmt.Errorf("the legacy lock is held by %s", record.HolderIdentity))
 	}
 
-	return l.create(ctx, ler)
+	// The legacy lock is free. Give replicas still on it one full poll to claim it.
+	log.Infof("%s has no row and the legacy lock %s is free; waiting %s for replicas on the legacy lock to claim it first",
+		l.Describe(), l.legacy.Describe(), l.grace)
+	if err := l.sleep(ctx, l.grace); err != nil {
+		return err
+	}
+
+	record, _, err = l.legacy.Get(ctx)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("locks: reading the legacy lock for %s: %w", l.name, err)
+	}
+	if err == nil && l.heldByOther(record, l.now()) {
+		// A replica on the legacy lock took the election. Stay a follower; client-go
+		// reports this one refusal and then follows the new holder from the next Get.
+		l.legacyHolderLogged = record.HolderIdentity
+		log.Infof("%s claimed the legacy lock %s during the grace period; %s stays a follower",
+			record.HolderIdentity, l.legacy.Describe(), l.identity)
+		return apierrors.NewConflict(sqlGroupResource, l.name,
+			fmt.Errorf("the legacy lock was claimed by %s", record.HolderIdentity))
+	}
+
+	if err := l.create(ctx, ler); err != nil {
+		return err
+	}
+	log.Infof("%s took over the election from the legacy lock %s; the legacy lock is no longer read", l.Describe(), l.legacy.Describe())
+	return nil
 }
 
 // heldByOther reports whether record names a live holder other than this lock's
@@ -303,6 +316,21 @@ func (l *sqlLock) heldByOther(record *resourcelock.LeaderElectionRecord, now tim
 	}
 	expiry := record.RenewTime.Add(time.Duration(record.LeaseDurationSeconds) * time.Second)
 	return expiry.After(now)
+}
+
+// sleepContext waits for d or until ctx is done, whichever comes first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // RecordEvent is a no-op; there is no event stream behind a SQL table.
