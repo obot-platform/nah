@@ -204,6 +204,44 @@ func TestSQLLegacyClaimedDuringGraceBacksOff(t *testing.T) {
 	}
 }
 
+func TestSQLLegacyClaimDuringGraceIsSeenDespiteClockSkew(t *testing.T) {
+	// The old replica that claims the Lease during the wait runs with a clock two
+	// minutes behind ours, so by timestamps its fresh claim already looks expired.
+	// The re-read must go by the record having changed, not by the timestamps.
+	ctx := context.Background()
+	b := newBridge(t, "new-1")
+	b.legacy.released(b.clock)
+	b.onSleep = func() { b.legacy.held("old-2", b.clock.Add(-2*time.Minute)) }
+
+	if _, _, err := b.l.Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
+		t.Fatalf("a claim during the grace period must win regardless of its clock, got %v", err)
+	}
+	if rowCount(t, b.l) != 0 {
+		t.Fatal("row created although an old replica claimed the legacy lock")
+	}
+}
+
+func TestSQLLegacyCreatedDuringGraceIsSeen(t *testing.T) {
+	// No Lease existed when the wait began; an old replica created one during it.
+	ctx := context.Background()
+	b := newBridge(t, "new-1")
+	b.legacy.released(b.clock)
+	if _, _, err := b.l.Get(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.legacy.notFound()
+	b.onSleep = func() { b.legacy.held("old-1", b.clock) }
+	if err := b.l.Update(ctx, record("new-1")); !apierrors.IsConflict(err) {
+		t.Fatalf("a Lease created during the grace period must win, got %v", err)
+	}
+	if rowCount(t, b.l) != 0 {
+		t.Fatal("row created although an old replica created the legacy lock")
+	}
+}
+
 func TestSQLLegacyExpiredHolderIsTakenOver(t *testing.T) {
 	ctx := context.Background()
 	b := newBridge(t, "new-1")

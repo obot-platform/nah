@@ -1,6 +1,7 @@
 package locks
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -269,7 +270,7 @@ func (l *sqlLock) Update(ctx context.Context, ler resourcelock.LeaderElectionRec
 // as far as client-go can tell and nothing is logged as a failure along the way. The
 // caller holds mu.
 func (l *sqlLock) takeOverFromLegacy(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
-	record, _, err := l.legacy.Get(ctx)
+	record, before, err := l.legacy.Get(ctx)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("locks: reading the legacy lock for %s: %w", l.name, err)
 	}
@@ -286,11 +287,17 @@ func (l *sqlLock) takeOverFromLegacy(ctx context.Context, ler resourcelock.Leade
 		return err
 	}
 
-	record, _, err = l.legacy.Get(ctx)
+	// Judge the re-read by what changed during the wait, not by timestamps. A live
+	// holder rewrites the record every two seconds, so a record that changed and now
+	// names a holder was claimed. The timestamps in the record were written with the
+	// holder's clock, which on premises may be minutes off from this one, and the
+	// clock-based check above is only a shortcut that client-go's own observation
+	// has already confirmed.
+	record, after, err := l.legacy.Get(ctx)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("locks: reading the legacy lock for %s: %w", l.name, err)
 	}
-	if err == nil && l.heldByOther(record, l.now()) {
+	if err == nil && !bytes.Equal(before, after) && record.HolderIdentity != "" && record.HolderIdentity != l.identity {
 		// A replica on the legacy lock took the election. Stay a follower; client-go
 		// reports this one refusal and then follows the new holder from the next Get.
 		l.legacyHolderLogged = record.HolderIdentity
