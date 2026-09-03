@@ -28,6 +28,7 @@ const (
 )`
 	// sqlProbe succeeds only if the table exists.
 	sqlProbe  = `SELECT 1 FROM leader_lock WHERE 1 = 0`
+	sqlExists = `SELECT EXISTS(SELECT 1 FROM leader_lock WHERE name = $1)`
 	sqlGet    = `SELECT record, version FROM leader_lock WHERE name = $1`
 	sqlCreate = `INSERT INTO leader_lock (name, record, version) VALUES ($1, $2, 1) ON CONFLICT (name) DO NOTHING`
 	sqlUpdate = `UPDATE leader_lock SET record = $1, version = version + 1 WHERE name = $2 AND version = $3`
@@ -112,7 +113,28 @@ func NewSQL(ctx context.Context, db *sql.DB, name, identity string, opts ...SQLO
 	for _, opt := range opts {
 		opt(l)
 	}
+	if l.legacy != nil {
+		l.logLegacyMode(ctx)
+	}
 	return l, nil
+}
+
+// logLegacyMode reports whether this election will read the legacy lock, so that a
+// migration still in progress can be told from one that has finished. A replica that
+// joins after the row exists never reads the legacy lock, whatever its configuration
+// says.
+func (l *sqlLock) logLegacyMode(ctx context.Context) {
+	var exists bool
+	if err := l.db.QueryRowContext(ctx, sqlExists, l.name).Scan(&exists); err != nil {
+		// Reporting the mode is not worth failing construction over. The lock logs
+		// what it does at each transition anyway.
+		return
+	}
+	if exists {
+		log.Infof("%s already has a row; the legacy lock %s is configured but will not be read", l.Describe(), l.legacy.Describe())
+		return
+	}
+	log.Infof("%s has no row; deferring to the legacy lock %s until one exists", l.Describe(), l.legacy.Describe())
 }
 
 // Get returns the current record. A missing row is reported as NotFound, which

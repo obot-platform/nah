@@ -162,11 +162,7 @@ func (ec *ElectionConfig) run(ctx context.Context, id string, cb OnLeader, onSwi
 	if err != nil {
 		return fmt.Errorf("error creating leader lock for %s: %v", ec.Name, err)
 	}
-	if ec.bridgeLegacyLease {
-		log.Infof("leader election %s: lock %s, deferring to the legacy Lease %s/%s until the first row exists", ec.Name, rl.Describe(), ec.Namespace, ec.Name)
-	} else {
-		log.Infof("leader election %s: lock %s", ec.Name, rl.Describe())
-	}
+	log.Infof("leader election %s: lock %s", ec.Name, rl.Describe())
 
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
 		Lock:          rl,
