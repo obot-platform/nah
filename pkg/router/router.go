@@ -213,6 +213,11 @@ func (r *Router) Start(ctx context.Context) error {
 
 	r.handlers.onError = r.OnErrorHandler
 
+	// Not ready until this replica either leads with its handlers started or follows
+	// with its caches loaded. Without this, a router still waiting on the election
+	// reports nothing, and other routers can make the process look ready without it.
+	setHealthy(r.healthName(), false)
+
 	// It's OK to start the electionConfig even if it's nil.
 	return r.electionConfig.Run(ctx, id, r.startHandlers, func(leader string) {
 		if id == leader {
@@ -222,14 +227,20 @@ func (r *Router) Start(ctx context.Context) error {
 		r.startLock.Lock()
 		defer r.startLock.Unlock()
 
-		setHealthy(r.name, false)
-		defer setHealthy(r.name, true)
+		setHealthy(r.healthName(), false)
+		defer setHealthy(r.healthName(), true)
 		// I am not the leader, so I am healthy when my cache is ready.
 		if err := r.handlers.Preload(ctx); err != nil {
 			// Failed to preload caches, panic
 			log.Fatalf("failed to preload caches: %v", err)
 		}
 	}, r.done)
+}
+
+// healthName is the key this router reports its health under. Each router needs its
+// own key so that one router becoming healthy cannot hide another that is not.
+func (r *Router) healthName() string {
+	return r.handlers.name
 }
 
 // done is a callback used by leader election to signal that the controllers are shut down.
@@ -254,8 +265,8 @@ func (r *Router) startHandlers(ctx context.Context) error {
 
 	var err error
 	// This is the leader now, so not ready until the controller is started and caches are ready.
-	setHealthy(r.name, false)
-	defer setHealthy(r.name, err == nil)
+	setHealthy(r.healthName(), false)
+	defer func() { setHealthy(r.healthName(), err == nil) }()
 
 	if err = r.handlers.Start(ctx); err != nil {
 		return err
